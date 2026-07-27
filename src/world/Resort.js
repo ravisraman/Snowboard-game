@@ -85,7 +85,7 @@ function edgePoint(course, z, side, extra = 0) {
  * ---------------------------------------------------------------- */
 
 /** Slalom-style marker poles down both edges of the groomer. */
-function addMarkerPoles(course, bucket) {
+function addMarkerPoles(course, bucket, shade) {
   for (let z = 120; z < COURSE.finishZ - 60; z += 32) {
     for (const side of [-1, 1]) {
       const p = edgePoint(course, z, side, 1.2);
@@ -95,6 +95,7 @@ function addMarkerPoles(course, bucket) {
       // exactly the distance where the piste edge stops being obvious.
       bucket(z, post(0.075, 1.55, PALETTE.pole, p.x, y - 0.1, p.z));
       bucket(z, post(0.085, 0.55, PALETTE.poleTip, p.x, y + 1.4, p.z));
+      shade.push({ x: p.x, z: p.z, r: 0.16 });
     }
   }
 }
@@ -185,7 +186,7 @@ function rockGeometry(rng, radius, height) {
  * obstacles the physics knows nothing about, which is worse than not having
  * them at all.
  */
-function addRocks(course, bucket, rng, density) {
+function addRocks(course, bucket, rng, density, shade) {
   for (let z = 200; z < COURSE.finishZ - 100; z += 46) {
     if (rng() > density) continue;
     const side = rng() < 0.5 ? -1 : 1;
@@ -197,6 +198,7 @@ function addRocks(course, bucket, rng, density) {
       g.translate(p.x, y - 0.25, p.z);
       bucket(z, g);
     }
+    shade.push({ x: p.x, z: p.z, r: radius });
   }
 }
 
@@ -246,8 +248,9 @@ function cableY(towers, z) {
   return last.y + CABLE_HEIGHT;
 }
 
-function addLift(course, bucket, towers) {
+function addLift(course, bucket, towers, shade) {
   for (const t of towers) {
+    shade.push({ x: t.x, z: t.z, r: 0.9 });
     // Tapered tower with a crossarm carrying both cables.
     bucket(t.z, post(0.42, CABLE_HEIGHT, PALETTE.steel, t.x, t.y - 0.4, t.z, 8));
     bucket(t.z, box(LANE_GAP + 1.9, 0.34, 0.42, PALETTE.steelDark, t.x, t.y + CABLE_HEIGHT - 0.5, t.z));
@@ -301,6 +304,11 @@ export function buildResort(course, quality = {}) {
   const group = new THREE.Group();
   group.name = 'resort';
 
+  // Everything that stands on the snow and should therefore have shade pooled
+  // around its foot. Collected as it is placed and handed to the terrain, which
+  // bakes the contact shading — see the occluder pass in `Terrain.js`.
+  const occluders = [];
+
   // Static furniture, bucketed by z so it can be merged into cullable chunks.
   const chunks = new Map();
   const bucket = (z, geo) => {
@@ -309,12 +317,12 @@ export function buildResort(course, quality = {}) {
     chunks.get(key).push(geo);
   };
 
-  addMarkerPoles(course, bucket);
+  addMarkerPoles(course, bucket, occluders);
   addNetting(course, bucket);
-  if (quality.rocks !== false) addRocks(course, bucket, rng, quality.rockDensity ?? 1);
+  if (quality.rocks !== false) addRocks(course, bucket, rng, quality.rockDensity ?? 1, occluders);
 
   const towers = towerHeights(course);
-  if (quality.chairlift !== false) addLift(course, bucket, towers);
+  if (quality.chairlift !== false) addLift(course, bucket, towers, occluders);
 
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
@@ -382,5 +390,5 @@ export function buildResort(course, quality = {}) {
     return Math.abs(x - p.x) < 7;
   };
 
-  return { group, update, exclude, towers };
+  return { group, update, exclude, towers, occluders };
 }

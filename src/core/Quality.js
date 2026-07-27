@@ -47,6 +47,7 @@ const TIERS = {
     msaaSamples: 4,
     bloom: true,
     grade: true,
+    shafts: 0.34,
     bloomStrength: 0.34,
     bloomThreshold: 0.92,
     // Resort furniture.

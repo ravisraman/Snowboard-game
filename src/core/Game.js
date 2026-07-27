@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Course, COURSE } from '../world/Course.js';
 import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
-import { buildForest } from '../world/Trees.js';
+import { buildForest, bucketColliders } from '../world/Trees.js';
 import { buildVillage } from '../world/Village.js';
 import { buildSky, buildMountains, buildClouds, buildLighting, buildSkyProbe, HORIZON_COLOR } from '../world/Environment.js';
 import { REFLECTIVE_MATERIALS } from '../entities/RiderModel.js';
@@ -122,7 +122,11 @@ export class Game {
     this.trees = forest.colliders;
     this.forest = forest;
 
-    this.scene.add(buildTerrain(course, { quality: this.quality, occluders: forest.colliders }));
+    // The slope bakes contact shade around everything standing on it — trees,
+    // rocks, lift towers, marker poles. It is the substitute for a screen-space
+    // AO pass, which this scene's kilometre-deep depth range cannot support.
+    const standing = bucketColliders([...forest.list, ...this.resort.occluders], 14);
+    this.scene.add(buildTerrain(course, { quality: this.quality, occluders: standing }));
 
     this.skiers = new Skiers(course);
     this.scene.add(this.skiers.group);

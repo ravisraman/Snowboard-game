@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp } from '../core/mathx.js';
+import { SUN_DIRECTION } from '../world/Environment.js';
 
 /**
  * Snow spray.
@@ -55,15 +56,36 @@ export class SnowSpray {
         uMap: { value: makeGrainTexture() },
         uScale: { value: 600 },
         uColor: { value: new THREE.Color('#ffffff') },
+        uShadeColor: { value: new THREE.Color('#b9cee2') },
+        uSunDir: { value: SUN_DIRECTION.clone() },
       },
+      /*
+       * Thrown snow is not a cloud of white dots.
+       *
+       * It is a sheet of ice crystals with the sun behind it, and what that
+       * looks like depends entirely on which way you are looking through it:
+       * lit from behind it glows, lit from in front it is a dull grey-blue.
+       * A single flat colour throws all of that away, so the shading here is
+       * the one thing that turns the plume from confetti into snow.
+       *
+       * Height above the board also matters — the top of a plume is thinner
+       * and brighter than its base, which is still half in the trench.
+       */
       vertexShader: /* glsl */ `
         attribute float aSize;
         attribute float aAlpha;
         varying float vAlpha;
+        varying float vGlow;
         uniform float uScale;
+        uniform vec3 uSunDir;
         void main() {
           vAlpha = aAlpha;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
+
+          // How much we are looking *into* the sun through this particle.
+          vec3 toCam = normalize(cameraPosition - position);
+          vGlow = max(0.0, dot(-toCam, -uSunDir));
+
           gl_PointSize = aSize * uScale / max(-mv.z, 0.1);
           gl_Position = projectionMatrix * mv;
         }
@@ -71,11 +93,18 @@ export class SnowSpray {
       fragmentShader: /* glsl */ `
         uniform sampler2D uMap;
         uniform vec3 uColor;
+        uniform vec3 uShadeColor;
         varying float vAlpha;
+        varying float vGlow;
         void main() {
           if (vAlpha <= 0.001) discard;
           vec4 tex = texture2D(uMap, gl_PointCoord);
-          gl_FragColor = vec4(uColor, tex.a * vAlpha);
+
+          // Backlit crystals glow; the rest sit in the cool shade of the plume.
+          vec3 col = mix(uShadeColor, uColor, pow(vGlow, 1.6));
+          col += vec3(0.35, 0.38, 0.4) * pow(vGlow, 6.0);
+
+          gl_FragColor = vec4(col, tex.a * vAlpha);
           if (gl_FragColor.a < 0.01) discard;
         }
       `,

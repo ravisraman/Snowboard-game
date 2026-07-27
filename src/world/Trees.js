@@ -323,7 +323,9 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
 
   const update = (dt) => { swayUniforms.uTime.value += dt; };
 
-  return { group, colliders: bucketColliders(colliders), update };
+  // The raw list is handed back too: the terrain needs to bake contact shade
+  // around every trunk, and it wants them ungrouped.
+  return { group, colliders: bucketColliders(colliders), list: colliders, update };
 }
 
 /** Buckets colliders by z so the rider only tests a handful per frame. */

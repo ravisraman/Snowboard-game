@@ -34,6 +34,10 @@ const SHEEN_STRENGTH = 0.5;
 const WRAP = 0.55;
 const WRAP_STRENGTH = 0.5;
 
+/** Depth of the boot-print-scale relief that keeps the near snow from being
+ * geometrically perfect. */
+const MICRO_DEPTH = 0.045;
+
 /** Brightness of the ice glitter close to the camera. */
 const GLITTER = 0.85;
 
@@ -287,6 +291,24 @@ export function makeSnowMaterial(extra = {}) {
            return fract(p.x * p.y);
          }
 
+         // Value noise from the same hash, so the micro-relief costs no extra
+         // texture and no extra uniform — just arithmetic.
+         float vnoise(vec2 p) {
+           vec2 i = floor(p);
+           vec2 f = fract(p);
+           f = f * f * (3.0 - 2.0 * f);
+           float a = hash21(i);
+           float b = hash21(i + vec2(1.0, 0.0));
+           float c = hash21(i + vec2(0.0, 1.0));
+           float d = hash21(i + vec2(1.0, 1.0));
+           return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+         }
+
+         // Three octaves at boot-print scale and finer.
+         float microRelief(vec2 p) {
+           return vnoise(p * 3.0) * 0.55 + vnoise(p * 8.0) * 0.3 + vnoise(p * 19.0) * 0.15;
+         }
+
          // Wind-scoured ripples in the untracked snow. Two waves crossed at an
          // angle, because sastrugi are cut by wind that has shifted over days —
          // a single sine reads as corrugated iron, not as a snowfield.
@@ -316,6 +338,20 @@ export function makeSnowMaterial(extra = {}) {
                float slope = cos(vU * CORD_K) * CORD_K * ${CORDUROY_DEPTH.toFixed(4)};
                normal = normalize(normal - uDir * slope * fade);
              }
+           }
+
+           // Micro-relief, everywhere and at the scale of a boot print. The
+           // slope's triangles are metres across, so up close the surface is
+           // otherwise geometrically perfect — and nothing in nature is. Three
+           // octaves of hashed noise, bumped into the normal and faded out
+           // before the frequency reaches a pixel and starts to crawl.
+           float detailFade = 1.0 - smoothstep(4.0, 26.0, length(vWorld - cameraPosition));
+           if (detailFade > 0.004) {
+             float e = 0.07;
+             float h0 = microRelief(vWorld.xz);
+             float dx = microRelief(vWorld.xz + vec2(e, 0.0)) - h0;
+             float dz = microRelief(vWorld.xz + vec2(0.0, e)) - h0;
+             normal = normalize(normal - vec3(dx, 0.0, dz) * (${MICRO_DEPTH.toFixed(3)} * detailFade) / e);
            }
 
            // The powder gets the same treatment at a much coarser scale: wind
@@ -417,6 +453,6 @@ export function makeSnowMaterial(extra = {}) {
   };
 
   // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v5';
+  material.customProgramCacheKey = () => 'alpine-snow-v6';
   return material;
 }
