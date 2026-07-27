@@ -40,6 +40,7 @@ const TIERS = {
     // Metres between the coarse columns that carry the snowfields past the fog.
     skirtStep: 28,
     fogDensity: 0.0026,
+    audio: true,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -56,6 +57,7 @@ const TIERS = {
     skirtStep: 70,
     // Slightly thicker air pulls the far draw in without showing an edge.
     fogDensity: 0.0034,
+    audio: true,
   },
 };
 

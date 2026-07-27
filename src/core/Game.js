@@ -8,6 +8,7 @@ import { buildSky, buildMountains, buildLighting, HORIZON_COLOR } from '../world
 import { Rider, RIDER_TUNING } from '../entities/Rider.js';
 import { Skiers } from '../entities/Skiers.js';
 import { SnowSpray } from '../fx/SnowSpray.js';
+import { GameAudio } from '../fx/Audio.js';
 import { ChaseCamera } from './ChaseCamera.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
@@ -49,6 +50,7 @@ export class Game {
     this.input = new Input();
     this.hud = new HUD();
     this.score = new Score();
+    this.audio = new GameAudio({ enabled: quality.audio !== false });
     this.touch = new TouchControls(this.input);
 
     this._sprayPos = new THREE.Vector3();
@@ -65,7 +67,9 @@ export class Game {
       onStart: () => this.start(),
       onRestart: () => this.restart(),
       onRescue: () => this.rescue(),
+      onMute: () => this.hud.setMuted(this.audio.toggleMuted()),
     });
+    this.hud.setMuted(this.audio.muted);
 
     this.reset();
     this.hud.showScreen('title');
@@ -129,6 +133,9 @@ export class Game {
   }
 
   start() {
+    // The only place an AudioContext can legally be created on mobile Safari:
+    // inside the user gesture that got us here.
+    this.audio.unlock();
     if (this.state === 'riding') return;
     this.reset();
     this.state = 'riding';
@@ -171,6 +178,7 @@ export class Game {
     this.hud.setStuck(false);
     this.rider.crash(reason);
     this.score.onCrash();
+    this.audio.crash();
     this.state = 'crashing';
     this.crashTimer = 0;
     this.chase.kick(1.6);
@@ -200,6 +208,7 @@ export class Game {
       this.chase.preview(this.rider, this.previewTime);
       this._updateBackdrop();
       this.spray.update(dt);
+      this.audio.quiet();
       this.input.endFrame();
       return;
     }
@@ -242,6 +251,7 @@ export class Game {
       this.rider.update(sdt, this.input);
       this.score.update(sdt, this.rider);
       if (this.rider.trickLanded) this.score.onTrickLanded(this.rider.trickLanded);
+      this._emitAudio();
       this._checkHazards();
       this._trackStuck(dt);
     } else if (this.state === 'finished') {
@@ -253,6 +263,7 @@ export class Game {
 
     this.touch.setAirborne(!this.rider.grounded && this.state === 'riding');
     this.skiers.update(sdt, this.rider.position.z);
+    this.audio.update(this.rider, this.state === 'riding');
     this._emitSpray(sdt);
     this.spray.update(sdt);
     this.chase.update(this.rider, dt);
@@ -291,6 +302,23 @@ export class Game {
   }
 
   /* ---------------------------------------------------------------- */
+
+  /** Fires the one-shots off the rider's per-frame event flags. */
+  _emitAudio() {
+    const r = this.rider;
+    if (r.justLaunched) this.audio.ollie();
+    if (r.skated) this.audio.skate();
+    if (r.justLanded > 2) {
+      this.audio.land(r.justLanded, r.powder);
+      if (r.powder > 0.5) this.audio.powderPuff();
+    }
+    if (r.trickLanded) {
+      // The award has already been scored by now, so the pitch reflects the
+      // multiplier you just earned rather than the one you had.
+      if (r.trickLanded.clean) this.audio.trick(this.score.combo);
+      else this.audio.fail();
+    }
+  }
 
   _emitSpray(dt) {
     const r = this.rider;

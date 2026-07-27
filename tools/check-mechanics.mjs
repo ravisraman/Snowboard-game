@@ -4,8 +4,8 @@
  * Boots the game in Chromium, takes over the frame loop so simulated time is
  * independent of render speed, and asserts the handful of properties that make
  * the game playable: a carve turns at a sane radius, powder actually bogs you
- * down without ever trapping you, every kicker on the course launches, and the
- * run is completable.
+ * down without ever trapping you, every kicker on the course launches, tricks
+ * score, sound behaves, and the run is completable.
  *
  *   npm run dev          # in another shell
  *   npm run check
@@ -283,6 +283,59 @@ const results = await page.evaluate(() => {
   return out;
 });
 
+/* ------------------------------------------------------------------
+ * Audio needs a fresh page (the run above has already ended), a real user
+ * gesture to create the context, and real elapsed time — the continuous
+ * voices ride on setTargetAtTime, which converges in wall-clock seconds and
+ * reads as silence if you sample it in the same tick you set it.
+ * ---------------------------------------------------------------- */
+
+await page.goto(URL, { waitUntil: 'load' });
+await page.waitForFunction(() => !!window.game, null, { timeout: 90000 });
+
+const audio = { supported: await page.evaluate(() => window.game.audio.supported) };
+audio.beforeGesture = await page.evaluate(() => !!window.game.audio.ctx);
+
+await page.click('#btn-start');
+await page.waitForTimeout(600);
+audio.afterGesture = await page.evaluate(() => window.game.audio.ctx?.state ?? 'none');
+
+await page.evaluate(() => {
+  const g = window.game;
+  g.renderer.setAnimationLoop(null);
+  const r = g.rider;
+  r.grounded = true; r.powder = 0; r.braking = false;
+  r.speed = 4; r.carveIntensity = 0;
+  g.audio.update(r, true);
+});
+await page.waitForTimeout(450);
+audio.idle = await page.evaluate(() => +window.game.audio.edgeGain.gain.value.toFixed(3));
+
+await page.evaluate(() => {
+  const g = window.game, r = g.rider;
+  r.speed = 30; r.carveIntensity = 1;
+  g.audio.update(r, true);
+});
+await page.waitForTimeout(900);
+audio.carving = await page.evaluate(() => ({
+  edge: +window.game.audio.edgeGain.gain.value.toFixed(3),
+  wind: +window.game.audio.windGain.gain.value.toFixed(3),
+}));
+
+audio.oneShots = await page.evaluate(() => {
+  const a = window.game.audio;
+  try {
+    a.ollie(); a.land(12, 0.2); a.powderPuff(); a.skate(); a.trick(4); a.fail(); a.crash();
+    return 'ok';
+  } catch (e) {
+    return `threw: ${e.message}`;
+  }
+});
+
+await page.click('#btn-mute');
+await page.waitForTimeout(320);
+audio.muted = await page.evaluate(() => +window.game.audio.master.gain.value.toFixed(3));
+
 await browser.close();
 
 /* ---------------------------------------------------------------- */
@@ -319,6 +372,14 @@ const checks = [
   ['run is completable', results.run.finished,
     results.run.finished ? `reached the finish in ${results.run.seconds} s` : (results.run.crashReason ?? 'never reached the finish')],
   ['run takes 60-180 s', results.run.seconds > 60 && results.run.seconds < 180, `${results.run.seconds} s`],
+  ['audio stays asleep until a user gesture', audio.supported && !audio.beforeGesture,
+    audio.beforeGesture ? 'a context existed before the click' : 'no context before DROP IN'],
+  ['audio starts on the drop-in gesture', audio.afterGesture === 'running', audio.afterGesture],
+  ['the edge voice tracks the carve', audio.carving.edge > audio.idle * 3 && audio.carving.edge > 0.1,
+    `${audio.idle} idle -> ${audio.carving.edge} carving`],
+  ['wind rises with speed', audio.carving.wind > 0.1, `${audio.carving.wind}`],
+  ['one-shots fire without throwing', audio.oneShots === 'ok', audio.oneShots],
+  ['mute silences the master', audio.muted === 0, `master ${audio.muted}`],
   ['kickers get hit on the way down', results.run.airs >= 3, `${results.run.airs} airs`],
 ];
 

@@ -53,6 +53,7 @@ export class HUD {
       stuck: $('stuck-prompt'),
       rescue: $('btn-rescue'),
       restartRun: $('btn-restart-run'),
+      mute: $('btn-mute'),
     };
 
     this._last = {
@@ -96,12 +97,17 @@ export class HUD {
     return false;
   }
 
-  onAction({ onStart, onRestart, onRescue }) {
+  onAction({ onStart, onRestart, onRescue, onMute }) {
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
     this.el.again.addEventListener('click', onRestart);
     this.el.rescue?.addEventListener('click', onRescue);
     this.el.restartRun?.addEventListener('click', onRestart);
+    this.el.mute?.addEventListener('click', onMute);
+  }
+
+  setMuted(muted) {
+    this.el.mute?.classList.toggle('is-muted', muted);
   }
 
   /** The "bogged down" offer, shown once the rider has ground to a halt. */
