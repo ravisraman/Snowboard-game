@@ -38,8 +38,11 @@ const SKY_FRAG = /* glsl */ `
     vec3 dir = normalize(vDir);
     float h = clamp(dir.y, -1.0, 1.0);
 
-    // Deep blue overhead easing to a pale, slightly warm horizon.
-    float t = pow(clamp(h, 0.0, 1.0), 0.62);
+    // Deep blue overhead easing to a pale, slightly warm horizon. The exponent
+    // decides how low the blue reaches: the chase camera sits close to the
+    // horizon, so most of the sky the player ever sees is the bottom of this
+    // gradient and a gentle curve leaves the whole frame washed out.
+    float t = pow(clamp(h, 0.0, 1.0), 0.35);
     vec3 col = mix(uHorizon, uZenith, t);
 
     // A little extra light just above the skyline.
@@ -57,9 +60,16 @@ const SKY_FRAG = /* glsl */ `
 export function buildSky() {
   const geometry = new THREE.SphereGeometry(7000, 32, 20);
   const material = new THREE.ShaderMaterial({
+    // Authored for the tone mapper, not for the eye. These values are what
+    // ACES has to *start* from to land on the winter blue we want; read
+    // straight they look oversaturated, which is exactly the point — the
+    // curve desaturates and lifts everything it touches.
     uniforms: {
-      uZenith: { value: new THREE.Color('#4d90d6') },
-      uHorizon: { value: new THREE.Color('#d2e4f4') },
+      // The horizon deliberately matches the fog colour exactly. Both are tone
+      // mapped by the same curve now, so matching the inputs is what makes the
+      // seam where the fogged snowfields meet the sky disappear.
+      uZenith: { value: new THREE.Color('#1f7ae8') },
+      uHorizon: { value: HORIZON_COLOR.clone() },
       uSunColor: { value: new THREE.Color('#ffe9c2') },
       uSunDir: { value: SUN_DIRECTION.clone() },
     },

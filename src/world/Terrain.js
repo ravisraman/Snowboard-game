@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COURSE } from './Course.js';
+import { SUN_DIRECTION } from './Environment.js';
 import { smoothstep } from '../core/mathx.js';
 
 /**
@@ -22,6 +23,9 @@ const GROOMED_COLOR = new THREE.Color('#eef5fb'); // packed corduroy
 const GROOMED_DEEP = new THREE.Color('#d3e3f1');  // troughs between the ridges
 const POWDER_COLOR = new THREE.Color('#fbfdff');  // untracked snow
 const SHADE_COLOR = new THREE.Color('#dceaf6');   // far-field cooling
+
+/** How hard the forward-scatter sheen sits on top of the lit surface. */
+const SHEEN_STRENGTH = 0.5;
 
 /** Corduroy ridge spacing and depth, in metres. A groomer's tiller is fine. */
 const CORDUROY_PERIOD = 0.3;
@@ -298,10 +302,27 @@ export function makeSnowMaterial(extra = {}) {
            float edge = smoothstep(0.35, 0.0, abs(au - ${COURSE.trackHalfWidth.toFixed(2)}));
            diffuseColor.rgb *= 1.0 - 0.04 * edge;
          }`
+      )
+      // Snow scatters strongly forward: look toward the sun across a packed
+      // piste and there is a broad sheen on it, brightest at grazing angles.
+      // A standard roughness lobe never produces that — it is the one thing a
+      // physically-plain white surface gets conspicuously wrong — and it is
+      // also where the bloom finds something worth blooming.
+      .replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+         {
+           vec3 viewDir = normalize(cameraPosition - vWorld);
+           vec3 sunDir = normalize(vec3(${SUN_DIRECTION.x.toFixed(4)}, ${SUN_DIRECTION.y.toFixed(4)}, ${SUN_DIRECTION.z.toFixed(4)}));
+           float forward = max(dot(-viewDir, -sunDir), 0.0);
+           float graze = 1.0 - abs(dot(normal, viewDir));
+           float sheen = pow(forward, 7.0) * pow(graze, 2.2);
+           gl_FragColor.rgb += sheen * ${SHEEN_STRENGTH.toFixed(3)};
+         }`
       );
   };
 
   // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v2';
+  material.customProgramCacheKey = () => 'alpine-snow-v3';
   return material;
 }

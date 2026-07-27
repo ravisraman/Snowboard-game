@@ -42,6 +42,13 @@ const TIERS = {
     fogDensity: 0.0026,
     audio: true,
     trackSegments: 2600,
+    // The post chain: multisampling, a high-threshold bloom and a grade.
+    postprocess: true,
+    msaaSamples: 4,
+    bloom: true,
+    grade: true,
+    bloomStrength: 0.34,
+    bloomThreshold: 0.92,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -60,6 +67,19 @@ const TIERS = {
     fogDensity: 0.0034,
     audio: true,
     trackSegments: 1100,
+    // A phone runs the chain too, but only the part that pays for itself: one
+    // multisampled render target and the output pass. Bloom is three more
+    // passes over every pixel on the hardware least able to afford them, and
+    // the grade is a fourth.
+    //
+    // Skipping the chain entirely was the obvious call and the wrong one: the
+    // sky writes its own fragments and is tone mapped only by `OutputPass`, so
+    // a phone without the chain renders a visibly different sky from a desktop.
+    // Multisampling is close to free on a tile-based GPU anyway.
+    postprocess: true,
+    msaaSamples: 4,
+    bloom: false,
+    grade: false,
   },
 };
 
