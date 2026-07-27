@@ -99,7 +99,7 @@ export class Game {
     // Backdrop rides with the camera on X/Z so the peaks stay distant.
     this.backdrop = new THREE.Group();
     this.backdrop.add(buildSky());
-    this.backdrop.add(buildMountains());
+    this.backdrop.add(buildMountains(909, this.quality));
     if (this.quality.clouds !== false) this.backdrop.add(buildClouds());
     this.scene.add(this.backdrop);
 

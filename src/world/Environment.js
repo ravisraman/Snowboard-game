@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { makeRng, clamp, smoothstep } from '../core/mathx.js';
+import { makeRng, clamp, smoothstep, valueNoise2 } from '../core/mathx.js';
 
 /**
  * Sky, sun and the mountain panorama.
@@ -18,6 +18,9 @@ const FOREST_COLOR = new THREE.Color('#3d5a66');
 
 /** Snow out of the sun goes blue, not grey — it is lit by sky alone. */
 const SNOW_SHADOW = new THREE.Color('#7ba3cd');
+
+/** The warm rim a face picks up when it is turned toward a low winter sun. */
+const SUN_WARM = new THREE.Color('#ffeacb');
 
 const SKY_VERT = /* glsl */ `
   varying vec3 vDir;
@@ -91,90 +94,164 @@ export function buildSky() {
  * ---------------------------------------------------------------- */
 
 /**
- * One jagged peak: a faceted rock cone with a snow cap whose lower edge dips
- * to a different height on every face, giving the ragged snowline you see on
- * a real summit instead of a clean ring.
+ * Ridged fractal noise — the standard trick for mountains, and the reason these
+ * ranges have crests rather than lumps.
+ *
+ * Ordinary fractal noise gives you rolling hills: its extremes are smooth
+ * maxima, so every summit is a dome. Folding the noise about its midpoint
+ * (`1 - |2n - 1|`) turns those smooth crossings into creases, and stacking
+ * octaves of *that* gives sharp ridgelines with spurs and gullies hanging off
+ * them, which is what an alpine range actually is.
  */
-function buildPeak(rng, { radius, height, sides, rock, snow }) {
+function ridged(x, y, seed, octaves = 5, lacunarity = 2.07, gain = 0.5) {
+  let sum = 0;
+  let amp = 1;
+  let norm = 0;
+  let fx = x;
+  let fy = y;
+  for (let o = 0; o < octaves; o++) {
+    const n = valueNoise2(fx, fy, seed + o * 131);
+    const r = 1 - Math.abs(n * 2 - 1);
+    // Squaring sharpens the crest and deepens the valleys between them.
+    sum += amp * r * r;
+    norm += amp;
+    amp *= gain;
+    fx *= lacunarity;
+    fy *= lacunarity;
+  }
+  return sum / norm;
+}
+
+/**
+ * One range: a band of mountains wrapped all the way round the horizon, built
+ * as a height field over an annulus rather than as a row of separate peaks.
+ *
+ * That is the whole change in approach. Isolated cones read as cones however
+ * carefully they are shaded — a real range is *continuous*, a crestline that
+ * rises into summits and drops into cols with spurs running down toward you,
+ * and you cannot get cols and spurs out of objects that do not touch. A polar
+ * height field gets all of it for a few thousand triangles.
+ */
+function buildRange(rng, ring) {
   const positions = [];
   const colors = [];
-  const rockCol = new THREE.Color(rock);
-  const snowCol = new THREE.Color(snow);
-  const shade = new THREE.Color();
 
-  const apex = new THREE.Vector3(rng.spread(radius * 0.22), height, rng.spread(radius * 0.22));
-  const base = [];
-  for (let i = 0; i < sides; i++) {
-    const a = (i / sides) * Math.PI * 2 + rng.spread(0.16);
-    const r = radius * (0.72 + rng() * 0.56);
-    base.push(new THREE.Vector3(Math.cos(a) * r, rng.spread(height * 0.03), Math.sin(a) * r));
-  }
+  const seed = rng.int(0, 100000);
+  const thetaSteps = ring.thetaSteps;
+  const rSteps = ring.rSteps;
+  const depth = ring.outer - ring.inner;
 
-  // Where the snow starts on each ridge, as a fraction from base to apex.
-  const snowline = base.map(() => 0.34 + rng() * 0.26);
+  const rockCol = new THREE.Color(ring.rock);
+  const snowCol = new THREE.Color(ring.snow);
 
-  // The peaks are drawn unlit, with everything baked into the vertex colours:
-  // a directional shade from the sun, a band of dark conifer forest over the
-  // lower slopes, and the atmosphere on top.
-  //
-  // Baking the light rather than letting the scene lamps do it is what keeps
-  // the ranges from flattening into pale grey pyramids. The fill light the
-  // snow in the foreground needs is far too much for a mountain four
-  // kilometres away, and there is no one setting that serves both.
-  //
-  // Haze is heaviest at the base. That is what dissolves the hard line where
-  // the fogged snowfields end and the range begins, and plants the peaks
-  // behind the valley floor rather than standing on it.
+  /** Height of the range at a point on the annulus. */
+  const heightAt = (theta, t) => {
+    // Arc length, so noise features are a consistent size in metres however far
+    // out the range sits — otherwise the distant ranges come out visibly
+    // stretched sideways.
+    const mid = ring.inner + depth * 0.5;
+    const s = theta * mid;
+    const r = ring.inner + t * depth;
+
+    // The crest. Low frequency along the arc so summits are hundreds of metres
+    // apart, and much slower still across the range so ridges run toward the
+    // viewer rather than parallel to the horizon.
+    const crest = ridged(s / ring.featureSize, r / (ring.featureSize * 2.6), seed);
+
+    // Massifs: a slow envelope that lifts whole sections of the range and drops
+    // others into passes, so the skyline has a rhythm instead of a uniform saw.
+    const massif = 0.55 + 0.72 * valueNoise2(s / (ring.featureSize * 5.5), 0.5, seed + 7717);
+
+    // Front-to-back envelope: the range rises out of the valley floor, tops out
+    // a little past its middle, and falls away behind.
+    const band = Math.sin(Math.PI * Math.pow(t, 0.78));
+
+    return ring.height * Math.pow(crest, 1.15) * massif * band;
+  };
+
+  const P = (theta, t) => {
+    const r = ring.inner + t * depth;
+    return new THREE.Vector3(Math.sin(theta) * r, heightAt(theta, t), Math.cos(theta) * r);
+  };
+
   const col = new THREE.Color();
   const ab = new THREE.Vector3();
   const ac = new THREE.Vector3();
   const nrm = new THREE.Vector3();
 
-  const face = (p, q, r, baseColor) => {
+  /**
+   * Shades one facet and writes it out.
+   *
+   * Snow lies where the ground is flat enough to hold it. That single rule is
+   * what turns a white pyramid into a mountain: the steep faces come out as
+   * bare rock, the shoulders and the summit fields stay white, and the snowline
+   * ends up ragged for free because the surface is ragged. Painting a snowline
+   * at a fixed altitude instead gives you a wedding cake.
+   */
+  const face = (p, q, r) => {
     ab.subVectors(q, p);
     ac.subVectors(r, p);
     nrm.crossVectors(ab, ac).normalize();
-    const d = Math.max(0, nrm.dot(SUN_DIRECTION));
+    if (nrm.y < 0) nrm.negate();
+
+    const sun = Math.max(0, nrm.dot(SUN_DIRECTION));
+    const midY = (p.y + q.y + r.y) / 3;
+    const altitude = clamp(midY / ring.height, 0, 1);
+
+    // Flat enough, and high enough. Altitude gates it — nothing below the
+    // snowline holds snow whatever its angle — and the slope then decides how
+    // much: a plastered face up high keeps a quarter of it, a shoulder keeps
+    // all of it, and the sheer walls stay bare rock, which is where all the
+    // contrast in a real range comes from. The altitude term is jittered by the
+    // facet's own position so the line never reads as a contour.
+    const flat = smoothstep(0.5, 0.86, nrm.y);
+    const jitter = valueNoise2(p.x * 0.004, p.z * 0.004, seed + 313) * 0.18;
+    const high = smoothstep(ring.snowline - 0.08, ring.snowline + 0.26, altitude + jitter);
+    const snowAmount = clamp(high * (0.12 + 0.9 * flat), 0, 1);
+
+    col.copy(rockCol).lerp(snowCol, snowAmount);
+
+    // Sunlit and shaded faces on a snow peak differ in hue more than in value —
+    // one is warm white, the other is lit by blue sky alone. Darkening without
+    // the hue shift is exactly what makes CG mountains look like grey card.
+    col.lerp(SNOW_SHADOW, (1 - sun) * (0.34 + 0.34 * snowAmount));
+    col.multiplyScalar(0.52 + 0.62 * sun);
+
+    // Forward scatter: faces turned toward the sun pick up a warm rim. It is a
+    // small effect and it does more for the sense of distance than the haze.
+    col.lerp(SUN_WARM, Math.pow(sun, 3.5) * 0.3);
+
+    // A conifer band around the feet of the nearer ranges.
+    if (ring.forest > 0) {
+      const band = smoothstep(0.015, 0.06, altitude) * (1 - smoothstep(0.1, 0.28, altitude));
+      col.lerp(FOREST_COLOR, band * ring.forest * (1 - snowAmount * 0.55));
+    }
+
+    // Aerial perspective, heaviest at the base: the air between you and the
+    // mountain is what dissolves the line where the fogged snowfields end, and
+    // what plants the range behind the valley rather than standing on it.
+    const f = (1 - altitude) * (1 - altitude);
+    col.lerp(HORIZON_COLOR, clamp(ring.haze + (1 - ring.haze) * 0.45 * f, 0, 1));
 
     for (const v of [p, q, r]) {
-      // Shade by hue as well as by value. A sunlit face and a shaded face on a
-      // snow peak differ mostly in colour — one is warm white, the other is lit
-      // by blue sky alone — and darkening alone just makes grey pyramids.
-      col.copy(baseColor).lerp(SNOW_SHADOW, (1 - d) * 0.62).multiplyScalar(0.62 + 0.46 * d);
-
-      const a = clamp(v.y / height, 0, 1);
-      const forestBand = smoothstep(0.02, 0.09, a) * (1 - smoothstep(0.16, 0.34, a));
-
-      const t = clamp(v.y / (height * 0.55), 0, 1);
-      const f = (1 - t) * (1 - t);
-      col.lerp(HORIZON_COLOR, 0.05 + 0.92 * f);
-      // Forest goes on after the haze, or the band sits so low on the peak
-      // that the atmosphere erases it entirely.
-      col.lerp(FOREST_COLOR, forestBand * 0.62);
-
       positions.push(v.x, v.y, v.z);
       colors.push(col.r, col.g, col.b);
     }
   };
 
-  for (let i = 0; i < sides; i++) {
-    const a = base[i];
-    const b = base[(i + 1) % sides];
-    const ta = snowline[i];
-    const tb = snowline[(i + 1) % sides];
-
-    // A little per-face variation keeps neighbouring facets from banding.
-    shade.copy(rockCol).multiplyScalar(0.9 + rng() * 0.2);
-    const sa = new THREE.Vector3().copy(a).lerp(apex, ta);
-    const sb = new THREE.Vector3().copy(b).lerp(apex, tb);
-
-    // Shaded-snow flank below the ragged snowline.
-    face(a, b, sb, shade);
-    face(a, sb, sa, shade);
-
-    // Bright snow above it.
-    const sv = snowCol.clone().multiplyScalar(0.95 + rng() * 0.1);
-    face(sa, sb, apex, sv);
+  for (let i = 0; i < thetaSteps; i++) {
+    const t0 = (i / thetaSteps) * Math.PI * 2;
+    const t1 = ((i + 1) / thetaSteps) * Math.PI * 2;
+    for (let j = 0; j < rSteps; j++) {
+      const a = j / rSteps;
+      const b = (j + 1) / rSteps;
+      const p00 = P(t0, a);
+      const p10 = P(t1, a);
+      const p01 = P(t0, b);
+      const p11 = P(t1, b);
+      face(p00, p01, p11);
+      face(p00, p11, p10);
+    }
   }
 
   const geo = new THREE.BufferGeometry();
@@ -184,59 +261,79 @@ function buildPeak(rng, { radius, height, sides, rock, snow }) {
 }
 
 /**
- * Three concentric rings of peaks. Nearer ranges are darker and more detailed;
- * far ranges wash out toward the horizon colour to fake aerial perspective.
+ * Four ranges, nested, each a continuous crestline wrapped round the horizon.
+ *
+ * Depth comes from three things working together, and all three have to be
+ * there or the panorama flattens: each range is *further*, so it is smaller for
+ * its height; each is *hazier*, washed further toward the sky colour; and each
+ * overlaps the one behind, so the eye gets occlusion to read the order from.
+ *
+ * The nearest is a band of foothills whose only job is to bridge the gap
+ * between the fogged edge of the snowfields and the first real range — without
+ * it the mountains stand on a visible seam.
+ *
+ * `rock` is really shaded snow: these are snow-plastered alpine faces, so the
+ * dark side of a ridge is blue, not brown.
  */
-export function buildMountains(seed = 909) {
+export function buildMountains(seed = 909, quality = {}) {
   const rng = makeRng(seed);
   const group = new THREE.Group();
   group.name = 'panorama';
 
-  // `haze` is how far each range is washed toward the horizon colour. The
-  // scene's fog is switched off for these meshes — at four kilometres it would
-  // erase them entirely — so the aerial perspective is baked into the vertex
-  // colours instead.
-  // "rock" is really shaded snow: these are snow-plastered alpine faces, so the
-  // dark side of a ridge is blue, not brown.
+  const detail = quality.panoramaDetail ?? 1;
+  const steps = (n) => Math.max(48, Math.round(n * detail));
+
   const rings = [
-    { radius: 1250, count: 24, hMin: 420, hMax: 760, rMin: 300, rMax: 470, rock: '#5d8fc4', snow: '#f2f7fc', haze: 0.04 },
-    { radius: 2200, count: 28, hMin: 700, hMax: 1250, rMin: 470, rMax: 760, rock: '#7aa3cf', snow: '#f4f9fd', haze: 0.16 },
-    { radius: 3400, count: 30, hMin: 1000, hMax: 1750, rMin: 720, rMax: 1050, rock: '#96b7d7', snow: '#f6fafe', haze: 0.34 },
+    {
+      // Foothills. The inner edge reaches back almost to the far lip of the
+      // playable snowfields — its height there is zero, so what it contributes
+      // is a floor, filling the band of empty fog between where the terrain
+      // stops and where the mountains start. Without it the ranges rise out of
+      // a flat grey strip along a visible seam.
+      inner: 820, outer: 2600, height: 300, featureSize: 360,
+      thetaSteps: steps(150), rSteps: Math.max(4, Math.round(6 * detail)),
+      snowline: 0.74, forest: 0.85, haze: 0.12,
+      rock: '#38536e', snow: '#eef5fb',
+    },
+    {
+      inner: 2200, outer: 3900, height: 1250, featureSize: 560,
+      thetaSteps: steps(200), rSteps: Math.max(5, Math.round(9 * detail)),
+      snowline: 0.5, forest: 0.42, haze: 0.03,
+      rock: '#1d4470', snow: '#f3f8fd',
+    },
+    {
+      inner: 3500, outer: 5600, height: 2100, featureSize: 820,
+      thetaSteps: steps(190), rSteps: Math.max(5, Math.round(9 * detail)),
+      snowline: 0.44, forest: 0.14, haze: 0.3,
+      rock: '#3d6693', snow: '#f6fafe',
+    },
+    {
+      inner: 5200, outer: 7400, height: 2950, featureSize: 1100,
+      thetaSteps: steps(170), rSteps: Math.max(4, Math.round(7 * detail)),
+      snowline: 0.4, forest: 0, haze: 0.58,
+      rock: '#6a90b8', snow: '#f8fbff',
+    },
   ];
 
-  const hazed = (hex, amount) => new THREE.Color(hex).lerp(HORIZON_COLOR, amount).getStyle();
-
+  const parts = [];
   for (const ring of rings) {
-    const parts = [];
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < ring.count; i++) {
-      const angle = (i / ring.count) * Math.PI * 2 + rng.spread(0.09);
-      const dist = ring.radius * (0.88 + rng() * 0.3);
-      const geo = buildPeak(rng, {
-        radius: rng.range(ring.rMin, ring.rMax),
-        height: rng.range(ring.hMin, ring.hMax),
-        sides: rng.int(5, 7),
-        rock: hazed(ring.rock, ring.haze),
-        snow: hazed(ring.snow, ring.haze * 0.6),
-      });
-      m.makeRotationY(rng() * Math.PI * 2);
-      // Base height matters more than it looks. Sink the ranges and the valley
-      // horizon crops away everything below the snowline, leaving a row of
-      // featureless white pyramids; the shaded flanks and the forest band only
-      // exist as far as they clear the skyline.
-      m.setPosition(Math.sin(angle) * dist, -25, Math.cos(angle) * dist);
-      geo.applyMatrix4(m);
-      parts.push(geo);
-    }
-
-    // Unlit: the sun is already baked into the vertex colours above.
-    const mesh = new THREE.Mesh(
-      mergeGeometries(parts, false),
-      new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })
-    );
-    mesh.frustumCulled = false;
-    group.add(mesh);
+    const geo = buildRange(rng, ring);
+    // Sunk a little, so the valley floor crops the very feet of the ranges and
+    // they rise out of the haze rather than standing on top of it.
+    geo.translate(0, -30, 0);
+    parts.push(geo);
   }
+
+  // Unlit: the sun, the snowline and the atmosphere are all already in the
+  // vertex colours. One mesh, because it is always entirely on screen or
+  // entirely behind you and there is nothing to cull.
+  const mesh = new THREE.Mesh(
+    mergeGeometries(parts, false),
+    new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })
+  );
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -950;
+  group.add(mesh);
 
   return group;
 }

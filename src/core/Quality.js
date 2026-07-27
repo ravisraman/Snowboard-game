@@ -56,6 +56,9 @@ const TIERS = {
     clouds: true,
     spindrift: true,
     driftRate: 62,
+    // Resolution of the mountain panorama's crestlines. It is drawn every
+    // frame and never culled, so this is the one knob on it.
+    panoramaDetail: 1,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -97,6 +100,7 @@ const TIERS = {
     // budget, so it thins out rather than disappearing.
     spindrift: true,
     driftRate: 24,
+    panoramaDetail: 0.62,
   },
 };
 
