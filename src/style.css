@@ -838,6 +838,49 @@ body.is-touch .touch { display: block; }
 .ctrl kbd:only-of-type { grid-column: 1 / span 2; min-width: 0; }
 .ctrl:has(kbd:only-of-type) kbd { justify-self: start; padding-inline: 1em; }
 
+/* ====================== Difficulty picker ==================== */
+
+.difficulty {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.diff-btn {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px 20px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--frost);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  opacity: 0.55;
+  transition: background 0.18s ease, opacity 0.18s ease;
+}
+
+.diff-btn:hover { opacity: 0.85; }
+.diff-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.8); outline-offset: 2px; }
+
+.diff-btn.on {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  opacity: 1;
+}
+
+.difficulty-blurb {
+  margin: 10px 0 20px;
+  font-size: 12.5px;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
 .cta {
   appearance: none;
   border: none;

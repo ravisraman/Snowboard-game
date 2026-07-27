@@ -48,6 +48,37 @@ Arrow keys work too, and the pause panel lists all of this in game so you never
 have to come back here. Your best score and best time are both kept in
 `localStorage`.
 
+## Difficulty
+
+The title screen offers **CRUISE** and **ORIGINAL**, and remembers which you
+picked. Cruise is the default, because the game as first tuned wanted a lot of
+you before it gave anything back.
+
+Cruise is not a slower version of the same ride — it changes the four things
+that actually cost a beginner the run:
+
+- **Speed builds gently.** A lower top speed and roughly twice the drag, so the
+  run settles at a pace you can steer at instead of one that arrives before you
+  have decided anything. Down the same pitch: 76 km/h against 111.
+- **Turns are wider and the piste is kinder.** A bigger carve radius, more grip
+  off the corduroy, and a piste that stays steerable at low speed, so drifting
+  into the powder is a nuisance rather than a dead end.
+- **Air is easier to use.** Lighter gravity and a bigger pop hold you up for
+  1.2 s off a flat ollie instead of 0.8, and the spin arms itself — you can
+  hold the steer through the lip rather than having to let go first to unlock
+  the rotation.
+- **Landings and trees forgive more.** The clean and sketchy landing windows are
+  both far wider (a ninety-degree touchdown that washes out on original rides
+  away on cruise), and trees have a smaller collider with a wider glancing band,
+  so more of them brush past you rather than ending the run.
+
+It is one object of numbers in `src/core/Difficulty.js`, assigned over the
+rider's shared tuning table at start-up, so nothing downstream knows there is
+more than one difficulty. `tools/check-mechanics.mjs` runs its physics
+assertions against `original` — the numbers there are the ones the ride model
+was designed to — and then compares the two presets directly, so a change that
+quietly made cruise harder than original would fail.
+
 ## Tricks and scoring
 
 There are four grabs, and the awkward ones pay more — that is the whole reason
@@ -284,6 +315,7 @@ src/
     Input.js              keyboard
     TouchControls.js      on-screen stick and buttons
     Controls.js           every control and trick, in one table
+    Difficulty.js         cruise/original tuning presets
     Score.js              trick scoring and the combo multiplier
     Quality.js            desktop/mobile tiers
     HUD.js                score, speed, timer, tracker, overlays

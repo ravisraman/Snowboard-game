@@ -17,6 +17,7 @@ import { Input } from './Input.js';
 import { HUD } from './HUD.js';
 import { Score } from './Score.js';
 import { TouchControls } from './TouchControls.js';
+import { difficulty, applyDifficulty, loadDifficulty } from './Difficulty.js';
 import { clamp } from './mathx.js';
 
 /**
@@ -58,6 +59,10 @@ export class Game {
 
     this._sprayPos = new THREE.Vector3();
 
+    // Before anything reads the tuning table.
+    this.difficultyName = loadDifficulty();
+    applyDifficulty(this.difficultyName);
+
     this._buildWorld();
 
     // A steady cross-slope breeze, blowing across the fall line rather than
@@ -82,8 +87,10 @@ export class Game {
       onRescue: () => this.rescue(),
       onMute: () => this.hud.setMuted(this.audio.toggleMuted()),
       onHelp: () => this.toggleHelp(),
+      onDifficulty: (name) => this.setDifficulty(name),
     });
     this.hud.setMuted(this.audio.muted);
+    this.hud.setDifficulty(this.difficultyName);
 
     this.reset();
     this.hud.showScreen('title');
@@ -212,6 +219,17 @@ export class Game {
       this._helpReturn = this.hud.currentScreen;
       this.hud.showScreen('help');
     }
+  }
+
+  /**
+   * Switches tuning. Safe at any moment, including mid-run: the rider reads the
+   * shared tuning table every frame rather than copying it once, so there is no
+   * state to migrate and nothing to rebuild.
+   */
+  setDifficulty(name) {
+    this.difficultyName = name;
+    applyDifficulty(name);
+    this.hud.setDifficulty(name);
   }
 
   start() {
@@ -508,14 +526,17 @@ export class Game {
         const dx = t.x - x;
         const dz = t.z - z;
         const d2 = dx * dx + dz * dz;
-        const rr = t.r + RIDER_TUNING.riderRadius;
+        // How much of the trunk actually bites is a difficulty setting: on the
+        // gentle tuning a tree is a smaller obstacle than it looks, which is
+        // easier to explain to a seven-year-old than it is to a physicist.
+        const rr = t.r * difficulty.treeRadiusScale + RIDER_TUNING.riderRadius;
         if (d2 < rr * rr) {
           // Square on, or a shoulder clipped in passing? The honest test is how
           // far off the travel line the trunk sits, not how deep the overlap
           // got: at thirty metres a second you cross a whole collider between
           // frames, so depth says more about the frame rate than about the hit.
           const lateral = Math.abs(-dx * this.rider.forwardZ + dz * this.rider.forwardX);
-          if (lateral > rr * 0.55) {
+          if (lateral > rr * difficulty.treeGlanceFraction) {
             // Geometry decides this, and it decides it every frame the contact
             // lasts. Letting the "already counted" guard fall through to the
             // crash instead made the *second* frame of a graze fatal — you were

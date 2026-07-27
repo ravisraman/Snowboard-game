@@ -68,6 +68,10 @@ const TUNING = {
 
   stumbleSeconds: 1.1,    // how long a clipped skier stays with you
   stumbleScrub: 0.45,     // fraction of speed kept through the hit
+
+  // Overwritten by `Difficulty.js`, which owns the handful of values that
+  // differ between the gentle tuning and the original one.
+  autoArmSpin: false,
 };
 
 export const RIDER_TUNING = TUNING;
@@ -272,7 +276,11 @@ export class Rider {
       // would be flung into an unasked-for 360 and wash out on landing — the
       // game punishing you for turning. So the stick has to return to centre
       // once after take-off before it counts as a spin command.
-      if (input.steer === 0) this.spinArmed = true;
+      //
+      // Except on the gentler tuning, where it is switched off: to anyone still
+      // learning, a rule that silently withholds the spin until you let go
+      // reads as spinning simply not working.
+      if (input.steer === 0 || TUNING.autoArmSpin) this.spinArmed = true;
 
       // In the air only the *board* turns. Travel stays ballistic, which is the
       // whole difference between a spin and a mid-air steer: you commit to your

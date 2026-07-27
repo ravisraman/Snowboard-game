@@ -1,5 +1,6 @@
 import { clamp, formatTime } from './mathx.js';
 import { CONTROL_GROUPS, TRICK_GUIDE, SCORING_NOTE } from './Controls.js';
+import { presetInfo } from './Difficulty.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and
@@ -67,6 +68,8 @@ export class HUD {
       rescue: $('btn-rescue'),
       restartRun: $('btn-restart-run'),
       mute: $('btn-mute'),
+      diffButtons: [...document.querySelectorAll('.diff-btn')],
+      diffBlurb: $('difficulty-blurb'),
     };
 
     this._last = {
@@ -175,7 +178,10 @@ export class HUD {
     return false;
   }
 
-  onAction({ onStart, onRestart, onRescue, onMute, onHelp }) {
+  onAction({ onStart, onRestart, onRescue, onMute, onHelp, onDifficulty }) {
+    for (const btn of this.el.diffButtons) {
+      btn.addEventListener('click', () => onDifficulty?.(btn.dataset.difficulty));
+    }
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
     this.el.again.addEventListener('click', onRestart);
@@ -189,6 +195,13 @@ export class HUD {
 
   setMuted(muted) {
     this.el.mute?.classList.toggle('is-muted', muted);
+  }
+
+  setDifficulty(name) {
+    for (const btn of this.el.diffButtons) {
+      btn.classList.toggle('on', btn.dataset.difficulty === name);
+    }
+    if (this.el.diffBlurb) this.el.diffBlurb.textContent = presetInfo(name).blurb;
   }
 
   /** Says what just happened, so a sudden loss of speed is not a mystery. */

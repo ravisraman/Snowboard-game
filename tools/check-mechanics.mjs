@@ -33,6 +33,13 @@ const results = await page.evaluate(() => {
   const g = window.game;
   const c = g.course;
   const r = g.rider;
+
+  // Everything below this line was written against the original tuning and
+  // asserts numbers from it — carve radius, terminal speed, which landings wash
+  // out. The game now ships on the gentler `cruise` tuning by default, so the
+  // harness has to say which one it means rather than inherit whichever is
+  // current. The differences between the two get their own block at the end.
+  g.setDifficulty('original');
   const dt = 1 / 120;
   const NONE = { steer: 0, tuck: false, brake: false, jumpPressed: false };
   const step = (n, input) => { for (let i = 0; i < n; i++) r.update(dt, input); };
@@ -544,6 +551,138 @@ const results = await page.evaluate(() => {
   }
 
   /**
+   * And the same descent on the gentle tuning, which is the one the game
+   * actually ships on and the one a child will meet first. Same autopilot, same
+   * traffic, no avoidance — if this does not reach the village then the default
+   * difficulty does not do what it claims.
+   */
+  {
+    g.setDifficulty('cruise');
+    const fake = { steer: 0, tuck: false, brake: false, press: false, grabType: null,
+      jumpPressed: false, restartPressed: false, helpPressed: false, endFrame() {}, clear() {} };
+    const realInput = g.input;
+    g.input = fake;
+    g.state = 'title';
+    g.start();
+
+    for (let i = 0; i < 120 * 400; i++) {
+      const rr = g.rider;
+      const lookZ = rr.position.z + Math.max(14, rr.speed * 1.7);
+      let d = Math.atan2(c.centerX(lookZ) - rr.position.x, lookZ - rr.position.z) - rr.yaw;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      fake.steer = rr.grounded ? Math.max(-1, Math.min(1, d * 2.4)) : 0;
+      fake.tuck = false;
+      g.update(1 / 120);
+      if (g.state !== 'riding') break;
+    }
+
+    out.cruiseRun = {
+      finished: g.state === 'finished',
+      seconds: +(g.finishElapsed ?? g.elapsed).toFixed(1),
+      crashReason: g.rider.crashReason ?? null,
+    };
+
+    g.input = realInput;
+    g.setDifficulty('original');
+    g.state = 'title';
+    g.reset();
+  }
+
+  /**
+   * The gentle tuning has to be measurably gentler, in the three ways a
+   * seven-year-old actually runs into: how fast it gets away from you, how long
+   * you have in the air to do something, and whether the landing forgives you.
+   */
+  {
+    const glide = () => {
+      // Ten seconds down the piste, following the line. Steering matters: left
+      // to run straight the rider leaves the groomer as the track bends away,
+      // bogs down in the powder, and the *faster* tuning ends up slower — which
+      // measures the powder, not the top speed.
+      r.reset();
+      r.position.set(c.centerX(700), 0, 700);
+      r.yaw = c.trackHeading(700);
+      r.speed = 6;
+      r.settle();
+      let top = 0;
+      for (let i = 0; i < 120 * 10; i++) {
+        const lookZ = r.position.z + Math.max(14, r.speed * 1.7);
+        let d = Math.atan2(c.centerX(lookZ) - r.position.x, lookZ - r.position.z) - r.yaw;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        r.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 2.4)) });
+        top = Math.max(top, r.speed);
+      }
+      return +(top * 3.6).toFixed(0);
+    };
+
+    const airTime = () => {
+      // A plain ollie on the flat, which isolates the two things that decide
+      // how long you have to do something: the pop and gravity.
+      r.reset();
+      r.position.set(c.centerX(700), 0, 700);
+      r.yaw = c.trackHeading(700);
+      r.speed = 14;
+      r.settle();
+      let air = 0;
+      let sawAir = false;
+      for (let i = 0; i < 900; i++) {
+        r.update(dt, { ...NONE, jumpPressed: i === 0 });
+        if (!r.grounded) { sawAir = true; air = Math.max(air, r.airTime); }
+        if (sawAir && r.grounded && air > 0.05) break;
+      }
+      return +air.toFixed(2);
+    };
+
+    // A landing well off square, and whether it rides away.
+    const landAt90 = () => {
+      r.reset();
+      r.position.set(c.centerX(600), 0, 600);
+      r.yaw = c.trackHeading(600);
+      r.speed = 20;
+      r.settle();
+      r.grounded = false;
+      r.vy = 6;
+      r._beginAir();
+      for (let i = 0; i < 900; i++) {
+        r.boardYaw = r.yaw + Math.PI * 0.5;
+        r.update(dt, NONE);
+        if (r.trickFailed) return 'washed out';
+        if (r.trickLanded) return 'rode away';
+      }
+      return 'never landed';
+    };
+
+    // A spin thrown without ever centring the stick — which the original
+    // deliberately refuses and the gentle tuning deliberately allows.
+    const spinWithoutArming = () => {
+      r.reset();
+      r.position.set(c.centerX(600), 0, 600);
+      r.yaw = c.trackHeading(600);
+      r.speed = 20;
+      r.settle();
+      r.grounded = false;
+      r.vy = 7;
+      r._beginAir();
+      let peak = 0;
+      for (let i = 0; i < 300 && !r.grounded; i++) {
+        r.update(dt, { ...NONE, steer: 1 });
+        peak = Math.max(peak, r.spinDegrees);
+      }
+      return Math.round(peak);
+    };
+
+    g.setDifficulty('original');
+    const original = { kmh: glide(), air: airTime(), landing: landAt90(), spin: spinWithoutArming() };
+    g.setDifficulty('cruise');
+    const cruise = { kmh: glide(), air: airTime(), landing: landAt90(), spin: spinWithoutArming() };
+    g.setDifficulty('original');
+
+    out.tuning = { original, cruise };
+  }
+
+  /**
    * Hopping must not be a scoring strategy. A straight air pays nothing and
    * banks nothing, however long it hangs; the same air with a grab on it pays.
    */
@@ -743,6 +882,20 @@ const checks = [
     results.combo.afterCrash === 1 && results.combo.keptPoints,
     `combo -> ${results.combo.afterCrash}`],
   ['every kicker launches', results.kickers.minAir > 0.4, `min air ${results.kickers.minAir}s over ${results.kickers.count} kickers`],
+  ['cruise gets down the mountain too', results.cruiseRun.finished,
+    results.cruiseRun.finished
+      ? `reached the village in ${results.cruiseRun.seconds} s`
+      : (results.cruiseRun.crashReason ?? 'never reached the finish')],
+  ['cruise runs slower than original', results.tuning.cruise.kmh < results.tuning.original.kmh * 0.75,
+    `${results.tuning.cruise.kmh} vs ${results.tuning.original.kmh} km/h down the same pitch`],
+  ['cruise gives longer in the air', results.tuning.cruise.air > results.tuning.original.air * 1.15,
+    `${results.tuning.cruise.air}s vs ${results.tuning.original.air}s from the same ollie`],
+  ['cruise forgives a landing that original washes out',
+    results.tuning.original.landing === 'washed out' && results.tuning.cruise.landing === 'rode away',
+    `at 90 degrees: original ${results.tuning.original.landing}, cruise ${results.tuning.cruise.landing}`],
+  ['cruise spins without arming first, original does not',
+    results.tuning.original.spin === 0 && results.tuning.cruise.spin > 90,
+    `original ${results.tuning.original.spin} deg, cruise ${results.tuning.cruise.spin} deg`],
   ['a straight hop pays nothing and banks nothing',
     results.hop.hopPaid === 0 && results.hop.hopCombo === 1,
     `hop ${results.hop.hopPaid} pts (combo ${results.hop.hopCombo}), same air grabbed ${results.hop.grabPaid} pts (combo ${results.hop.grabCombo})`],

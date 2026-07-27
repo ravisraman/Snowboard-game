@@ -23,7 +23,7 @@ export const CONTROL_GROUPS = [
   {
     title: 'In the air',
     rows: [
-      { keys: ['A', 'D'], touch: 'Drag', label: 'Spin the board — let go once first to arm it' },
+      { keys: ['A', 'D'], touch: 'Drag', label: 'Spin the board — on ORIGINAL, let go of the steer once first to arm it' },
       { keys: ['S'], touch: 'INDY', label: 'Indy — the easy one' },
       { keys: ['W'], touch: 'NOSE', label: 'Nose grab' },
       { keys: ['Q'], label: 'Melon' },
