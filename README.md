@@ -157,6 +157,48 @@ plane: a nose grab and an indy would both be the same downward reach.
 The limbs are smooth-shaded and round while the mountain is faceted. That is
 deliberate — the rider is the one object the camera never looks away from.
 
+### One mesh, one material, one draw call
+
+The body used to be about forty boxes and capsules bolted together, and it read
+exactly like that. It is now a single `SkinnedMesh` over a sixteen-bone
+skeleton, textured from one atlas painted onto a canvas at start-up
+(`RiderTextures.js`) — jacket panels and stitching, a knit beanie, nylon
+trousers, a face — with a normal map derived from the same drawing by a Sobel
+pass, so the seams and the knit actually catch the light. Because it is one
+mesh with one material, the whole character costs a single draw call, which is
+fewer than the boxes did: the frame went from 218 draw calls to 184.
+
+The rig kept the shape it already had. `Rider.js` reaches into
+`armFront.root`, `legBack.joint`, `neck` and `head` by name, and `Bone` extends
+`Object3D`, so those became bones under the same names and several hundred
+lines of posing code carried over untouched.
+
+**The limbs are rigid segments, not skinned across their joints.** They were
+skinned, at first, which is what a character rig normally does — and it cannot
+survive the poses this game asks for. Linear blend skinning pulls the surface
+toward the bone axis wherever two bones share a vertex, so a narrow blend band
+turned the inside of a folded knee inside out in every grab (the rider holds a
+hundred and fifteen degrees of knee for whole seconds at a time) and a wide one
+sucked the legs flat into ribbons in every hard carve. There is no width that
+survives both; the real answers are dual quaternion skinning or corrective
+shapes, and both are a lot of machinery for a character this size. Rigid
+segments cannot deform at all, and the seam at each joint is covered by a ball
+centred on the pivot — a point that by definition never moves however far the
+joint bends.
+
+Two smaller things do most of the work of making it feel alive: a cool fresnel
+rim keyed to the sky, added as emission so it survives a tree's shadow, and the
+bobble on the beanie hanging off a damped spring driven by the head's own
+acceleration — it lags every landing, whips through a spin, and settles on a
+straight run.
+
+Nothing automated can tell you whether a character looks good.
+`tools/rider-shots.mjs` drives the rider into the poses that matter — carving,
+tucking, mid-grab, close on the head — and leaves the pictures somewhere they
+can be looked at. Everything the harness *can* check, it does: that the rig is
+the shape the posing code assumes, that the weights are normalised, and that a
+whole descent never drives a bone non-finite.
+
 ## Hazards
 
 **Only a tree hit square on ends a run.** Everything else costs you speed, your
@@ -330,7 +372,8 @@ src/
     Environment.js        sky, clouds, mountain panorama, lighting
   entities/
     Rider.js              ride physics and posing
-    RiderModel.js         the snowboarder's geometry and rig
+    RiderModel.js         the snowboarder's geometry, skeleton and skinning
+    RiderTextures.js      the rider's texture atlas, painted on a canvas
     Skiers.js             drifting NPC skiers
   fx/
     SnowSpray.js          carve plume particles
@@ -340,6 +383,7 @@ src/
 tools/
   check-mechanics.mjs     headless smoke test for the ride model
   screenshots.mjs         desktop and phone captures
+  rider-shots.mjs         close-ups of the rider, pose by pose
 ```
 
 ## How the ride model works

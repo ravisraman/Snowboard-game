@@ -809,6 +809,101 @@ ui.draws = await page.evaluate(() => {
   return { calls: info.calls, triangles: info.triangles };
 });
 
+/* ------------------------------------------------------------------
+ * The rider's rig.
+ *
+ * The model is one skinned mesh over a skeleton whose bone names `Rider.js`
+ * reaches for directly. Nothing here judges whether the character looks good —
+ * that needs eyes, and `tools/rider-shots.mjs` is what puts pictures in front
+ * of them. What can be checked is that the rig is the shape the posing code
+ * assumes, and that a full descent never drives a bone to a value that would
+ * make the whole body vanish.
+ * ---------------------------------------------------------------- */
+ui.rig = await page.evaluate(() => {
+  const g = window.game;
+  const m = g.rider.model;
+
+  let skinnedMeshes = 0;
+  m.root.traverse((o) => { if (o.isSkinnedMesh) skinnedMeshes++; });
+
+  // Every node the posing code drives, and the bones behind them.
+  const posed = ['root', 'tilt', 'board', 'body', 'hips', 'torso', 'neck', 'head', 'bobble'];
+  const missing = posed.filter((k) => !m[k]);
+  for (const limb of ['armFront', 'armBack', 'legFront', 'legBack']) {
+    for (const part of ['root', 'joint', 'end']) {
+      if (!m[limb]?.[part]?.isBone) missing.push(`${limb}.${part}`);
+    }
+  }
+  for (const leg of ['legFront', 'legBack']) if (!m[leg]?.boot) missing.push(`${leg}.boot`);
+
+  const geo = m.skinned.geometry;
+  const bones = m.skeleton.bones.length;
+
+  // Weights have to sum to one, or the surface shrinks toward the origin.
+  const w = geo.attributes.skinWeight;
+  let worstWeight = 0;
+  for (let i = 0; i < w.count; i++) {
+    const sum = w.getX(i) + w.getY(i) + w.getZ(i) + w.getW(i);
+    worstWeight = Math.max(worstWeight, Math.abs(sum - 1));
+  }
+
+  // And every skinIndex has to name a bone that exists.
+  const si = geo.attributes.skinIndex;
+  let badIndex = 0;
+  for (let i = 0; i < si.count; i++) {
+    if (si.getX(i) >= bones || si.getY(i) >= bones) badIndex++;
+  }
+
+  return {
+    skinnedMeshes,
+    missing,
+    bones,
+    vertices: geo.attributes.position.count,
+    hasUV: !!geo.attributes.uv,
+    worstWeight: +worstWeight.toFixed(4),
+    badIndex,
+    culled: m.skinned.frustumCulled,
+  };
+});
+
+// Ride the whole course and watch the skeleton for anything non-finite. A
+// single NaN propagates through `matrixWorld` and takes the entire character
+// off screen, and it is exactly the sort of thing a bad IK target produces
+// only in the one pose nobody screenshotted.
+ui.boneHealth = await page.evaluate(() => {
+  const g = window.game;
+  g.restart();
+  const dt = 1 / 60;
+  let bad = 0;
+  let frames = 0;
+  let maxCrouch = 0;
+
+  // The game reads its own input object, so driving it means substituting one.
+  const fake = { steer: 0, tuck: false, brake: false, press: false, grabType: null,
+    jumpPressed: false, restartPressed: false, helpPressed: false, endFrame() {}, clear() {} };
+  const realInput = g.input;
+  g.input = fake;
+
+  for (let i = 0; i < 60 * 60 && g.state === 'riding'; i++) {
+    // Steer back toward the middle of the piste, and spend a good part of the
+    // descent in the air holding a grab — the deepest crouch the rig ever sees.
+    const d = g.course.centerX(g.rider.position.z) - g.rider.position.x;
+    fake.steer = Math.max(-1, Math.min(1, d * 2.4));
+    fake.jumpPressed = i % 200 === 0;
+    fake.grabType = i % 200 < 40 ? 'method' : null;
+    fake.tuck = i % 200 > 120;
+    g.update(dt);
+    frames++;
+    maxCrouch = Math.max(maxCrouch, g.rider._crouch);
+    for (const b of g.rider.model.skeleton.bones) {
+      const e = b.matrixWorld.elements;
+      for (let k = 0; k < 16; k++) if (!Number.isFinite(e[k])) { bad++; k = 16; }
+    }
+  }
+  g.input = realInput;
+  return { bad, frames, maxCrouch: +maxCrouch.toFixed(3) };
+});
+
 // Rescue teleports the rider, so it must not fire on a stray key press — only
 // once the game has actually offered it.
 ui.rescue = await page.evaluate(() => {
@@ -931,6 +1026,19 @@ const checks = [
   ['a pause stops the clock', ui.clockDrift === 0, `${ui.clockDrift}s of drift over 0.9s paused`],
   ['closing it resumes the run', ui.resumedState === 'riding' && ui.clockRuns,
     `${ui.resumedState}, clock ${ui.clockRuns ? 'running' : 'stopped'}`],
+  ['the rider is a single skinned mesh', ui.rig.skinnedMeshes === 1,
+    `${ui.rig.skinnedMeshes} skinned meshes, ${ui.rig.vertices} vertices over ${ui.rig.bones} bones`],
+  ['every node the posing code drives exists', ui.rig.missing.length === 0,
+    ui.rig.missing.length ? `missing ${ui.rig.missing.join(', ')}` : 'all present, limbs are bones'],
+  ['the skin weights are normalised and in range',
+    ui.rig.worstWeight < 0.001 && ui.rig.badIndex === 0 && ui.rig.hasUV,
+    `worst weight error ${ui.rig.worstWeight}, ${ui.rig.badIndex} out-of-range bone indices`],
+  ['the rider is never frustum culled', ui.rig.culled === false,
+    ui.rig.culled ? 'culled on its bind pose bounds' : 'always drawn'],
+  ['no bone goes non-finite over a whole descent', ui.boneHealth.bad === 0,
+    `${ui.boneHealth.bad} bad matrices over ${ui.boneHealth.frames} frames`],
+  ['the crouch stays inside what the knees can solve', ui.boneHealth.maxCrouch <= 0.381,
+    `deepest crouch ${ui.boneHealth.maxCrouch} m`],
   ['the frame stays inside its draw-call budget', ui.draws.calls > 0 && ui.draws.calls < 260,
     `${ui.draws.calls} calls, ${(ui.draws.triangles / 1000).toFixed(0)}k triangles`],
   ['rescue only fires once you are bogged down',

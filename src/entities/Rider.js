@@ -165,6 +165,14 @@ export class Rider {
     this._weight = 0;
     this._lastSpeed = this.speed;
 
+    // Secondary motion: the bobble on the beanie, on a spring of its own, and
+    // where the rider is looking. Neither is driven by anything the physics
+    // cares about — they exist because a body that only ever moves where it is
+    // told reads as a mannequin being carried down the hill.
+    this._bobble = { x: 0, z: 0, vx: 0, vz: 0 };
+    this._look = 0;
+    this._lastYaw = this.yaw;
+
     this.model.root.position.copy(this.position);
     this.model.root.rotation.set(0, this.yaw, 0);
     this.model.tilt.rotation.set(0, 0, 0);
@@ -687,7 +695,10 @@ export class Rider {
       // and the arm alone cannot span the gap.
       crouch += -0.14 + spinTuck + (this.grabbing ? 0.36 : 0);
     }
-    this._crouch = damp(this._crouch, crouch, this.grounded ? 12 : 8, dt);
+    // Capped, because the knees have to make up every centimetre of it: fold
+    // them much past this and the two-bone solve doubles the leg back on
+    // itself and the skinned surface turns inside out at the crease.
+    this._crouch = damp(this._crouch, clamp(crouch, -0.2, 0.38), this.grounded ? 12 : 8, dt);
     m.body.position.y = RIG.boardTop + RIG.hipHeight - this._crouch;
     m.body.rotation.x = this._crouch * 0.55 + (this.tucking ? 0.28 : 0);
 
@@ -720,8 +731,18 @@ export class Rider {
 
     // The board runs slightly across its own path in a carve.
     m.board.rotation.y = -leanRatio * 0.14;
-    m.head.rotation.y = leanRatio * 0.42 * facing + 0.15 * facing;
     m.neck.rotation.z = -leanRatio * 0.12;
+
+    // Where the rider is looking. A carve is led with the head — you look
+    // through the turn well before the board gets there — so the head tracks
+    // the *rate* of turn rather than the edge angle, and keeps looking that
+    // way for a moment after the board has come round.
+    const turnRate = clamp(angleDelta(this._lastYaw, this.yaw) / Math.max(dt, 1e-4) / 1.6, -1, 1);
+    this._lastYaw = this.yaw;
+    this._look = damp(this._look, turnRate, 6, dt);
+    m.head.rotation.y = (leanRatio * 0.28 + this._look * 0.5) * facing + 0.15 * facing;
+    // Chin down over the nose in a tuck, up and level in the air.
+    m.head.rotation.x = this.tucking ? 0.24 : this.grounded ? 0.04 : -0.12;
 
     // Clipped somebody: arms up, and a wobble that decays over the second or so
     // it takes to gather yourself back up. Without it the speed simply vanishes
@@ -731,8 +752,39 @@ export class Rider {
       const t = (TUNING.stumbleSeconds - this.stumbleTime) * 19;
       m.tilt.rotation.z += Math.sin(t) * 0.34 * w;
       m.tilt.rotation.x += Math.sin(t * 0.7 + 1.2) * 0.16 * w;
-      m.torso.rotation.x += Math.sin(t * 1.3) * 0.12 * w;
+      m.torso.rotation.x = Math.sin(t * 1.3) * 0.12 * w;
+    } else {
+      m.torso.rotation.x = 0;
     }
+
+    this._swingBobble(dt);
+  }
+
+  /**
+   * The bobble on the beanie, as a damped spring hanging off the head.
+   *
+   * It is driven by the head's own acceleration rather than by any input, so
+   * it lags every landing, whips through a spin and settles on a straight
+   * run — which is exactly the tell that separates a character from a prop.
+   * Two axes are enough: it never needs to know it is a pendulum.
+   */
+  _swingBobble(dt) {
+    const b = this._bobble;
+    const m = this.model;
+    // Head world position, cheaply: the bobble only needs to know how hard the
+    // head is being thrown about, and the tilt group carries all of that.
+    const driveX = -m.tilt.rotation.z * 2.2 - this._weight * 0.3;
+    const driveZ = m.tilt.rotation.x * 1.8 + (this.grounded ? 0 : -0.5);
+
+    const stiffness = 58;
+    const damping = 7.5;
+    b.vx += (driveX - b.x) * stiffness * dt - b.vx * damping * dt;
+    b.vz += (driveZ - b.z) * stiffness * dt - b.vz * damping * dt;
+    b.x = clamp(b.x + b.vx * dt, -1.1, 1.1);
+    b.z = clamp(b.z + b.vz * dt, -1.1, 1.1);
+
+    m.bobble.rotation.z = b.x * 0.5;
+    m.bobble.rotation.x = b.z * 0.5;
   }
 
   /**
