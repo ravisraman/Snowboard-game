@@ -242,6 +242,122 @@ export function buildMountains(seed = 909) {
 }
 
 /* ------------------------------------------------------------------
+ * Clouds
+ * ---------------------------------------------------------------- */
+
+/**
+ * A band of cloud caught between the ranges.
+ *
+ * Deliberately low and thin. A clear winter morning does not have weather in
+ * it — what it has is a line of cloud snagged on the peaks, and that line is
+ * worth having because it is the only thing in the upper half of the frame that
+ * is not a triangle.
+ *
+ * Each puff is a horizontal quad, and the whole thing lives or dies on the
+ * edges: a hard-edged quad four kilometres away reads unmistakably as a white
+ * rectangle stuck to a mountain. So the shader fades each one radially to
+ * nothing well inside its own corners, and the cloud is the overlap of a
+ * handful of them rather than any single shape.
+ */
+
+const CLOUD_VERT = /* glsl */ `
+  attribute vec2 aPuffUv;
+  varying vec2 vPuffUv;
+  varying vec3 vColor;
+  void main() {
+    vPuffUv = aPuffUv;
+    vColor = color;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const CLOUD_FRAG = /* glsl */ `
+  varying vec2 vPuffUv;
+  varying vec3 vColor;
+  uniform float uOpacity;
+  void main() {
+    // Radial falloff from the middle of the puff, squared so the edge is soft
+    // over most of the quad rather than only at the very rim.
+    float r = length(vPuffUv - 0.5) * 2.0;
+    float a = 1.0 - smoothstep(0.15, 1.0, r);
+    a *= a;
+    if (a < 0.004) discard;
+    gl_FragColor = vec4(vColor, a * uOpacity);
+  }
+`;
+
+export function buildClouds(seed = 4471) {
+  const rng = makeRng(seed);
+  const positions = [];
+  const colors = [];
+  const uvs = [];
+  const col = new THREE.Color();
+
+  const BRIGHT = new THREE.Color('#ffffff');
+  const SHADE = new THREE.Color('#b9cfe4');
+
+  for (let i = 0; i < 22; i++) {
+    const angle = rng() * Math.PI * 2;
+    // Between the near range and the far one. Further out than this and the
+    // back ring simply hides them; nearer and they read as fog, not cloud.
+    const dist = 1500 + rng() * 900;
+    const cx = Math.sin(angle) * dist;
+    const cz = Math.cos(angle) * dist;
+    // Low enough to catch on the ranges rather than float free above them.
+    const cy = 380 + rng() * 320;
+
+    // Each cloud is a handful of overlapping quads at slightly different
+    // heights, which from below reads as depth without any of the cost.
+    const puffs = rng.int(4, 8);
+    for (let p = 0; p < puffs; p++) {
+      const w = 180 + rng() * 420;
+      const d = 90 + rng() * 190;
+      const ox = rng.spread(340);
+      const oz = rng.spread(200);
+      const oy = rng.spread(70);
+
+      // Underside darker than the top edge, which is the whole shape cue.
+      col.copy(BRIGHT).lerp(SHADE, 0.3 + rng() * 0.4).lerp(HORIZON_COLOR, 0.22);
+
+      const x0 = cx + ox - w * 0.5;
+      const x1 = cx + ox + w * 0.5;
+      const z0 = cz + oz - d * 0.5;
+      const z1 = cz + oz + d * 0.5;
+      const y = cy + oy;
+
+      positions.push(x0, y, z0, x1, y, z1, x1, y, z0);
+      positions.push(x0, y, z0, x0, y, z1, x1, y, z1);
+      uvs.push(0, 0, 1, 1, 1, 0);
+      uvs.push(0, 0, 0, 1, 1, 1);
+      for (let v = 0; v < 6; v++) colors.push(col.r, col.g, col.b);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('aPuffUv', new THREE.Float32BufferAttribute(uvs, 2));
+
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.ShaderMaterial({
+      uniforms: { uOpacity: { value: 0.85 } },
+      vertexShader: CLOUD_VERT,
+      fragmentShader: CLOUD_FRAG,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  mesh.renderOrder = -900;   // after the sky, before everything solid
+  mesh.frustumCulled = false;
+  mesh.name = 'clouds';
+  return mesh;
+}
+
+/* ------------------------------------------------------------------
  * Lighting
  * ---------------------------------------------------------------- */
 

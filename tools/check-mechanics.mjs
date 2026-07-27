@@ -537,6 +537,18 @@ await page.waitForTimeout(2000);
 ui.resumedState = await page.evaluate(() => window.game.state);
 ui.clockRuns = await page.evaluate((before) => window.game.elapsed > before, elapsedAtPause);
 
+// What the scene itself costs, a third of the way down the mountain. Measured
+// from a direct render rather than from the live frame: `renderer.info` resets
+// on every `render()` call, and through the composer the last of those is a
+// single fullscreen quad, so reading it after a frame reports "1 draw call".
+ui.draws = await page.evaluate(() => {
+  const g = window.game;
+  g.renderer.info.reset();
+  g.renderer.render(g.scene, g.camera);
+  const info = g.renderer.info.render;
+  return { calls: info.calls, triangles: info.triangles };
+});
+
 // Rescue teleports the rider, so it must not fire on a stray key press — only
 // once the game has actually offered it.
 ui.rescue = await page.evaluate(() => {
@@ -626,6 +638,8 @@ const checks = [
   ['a pause stops the clock', ui.clockDrift === 0, `${ui.clockDrift}s of drift over 0.9s paused`],
   ['closing it resumes the run', ui.resumedState === 'riding' && ui.clockRuns,
     `${ui.resumedState}, clock ${ui.clockRuns ? 'running' : 'stopped'}`],
+  ['the frame stays inside its draw-call budget', ui.draws.calls > 0 && ui.draws.calls < 260,
+    `${ui.draws.calls} calls, ${(ui.draws.triangles / 1000).toFixed(0)}k triangles`],
   ['rescue only fires once you are bogged down',
     ui.rescue.ignoredWhenNotStuck && ui.rescue.actedWhenStuck,
     ui.rescue.ignoredWhenNotStuck ? 'ignored mid-run, acted when offered' : 'teleported on a stray press'],

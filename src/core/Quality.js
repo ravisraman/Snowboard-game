@@ -49,6 +49,11 @@ const TIERS = {
     grade: true,
     bloomStrength: 0.34,
     bloomThreshold: 0.92,
+    // Resort furniture.
+    chairlift: true,
+    rocks: true,
+    rockDensity: 1,
+    clouds: true,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -80,6 +85,12 @@ const TIERS = {
     msaaSamples: 4,
     bloom: false,
     grade: false,
+    // The lift stays — it is most of what says "resort" — but the far-field
+    // rocks thin out, since they are the detail least likely to be looked at.
+    chairlift: true,
+    rocks: true,
+    rockDensity: 0.45,
+    clouds: true,
   },
 };
 

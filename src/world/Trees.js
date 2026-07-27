@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { COURSE } from './Course.js';
-import { clamp } from '../core/mathx.js';
+import { clamp, makeRng } from '../core/mathx.js';
 
 /**
  * Snow-laden alpine pines.
@@ -158,10 +158,16 @@ function buildPineGeometry(v) {
  * Scatters trees over the slope and returns instanced meshes plus a
  * z-bucketed collider list.
  */
-export function buildForest(course, { exclude, quality = {} } = {}) {
+export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}) {
   const densityScale = quality.treeDensity ?? 1;
   const farForest = quality.farForest ?? true;
-  const rng = course.rng;
+
+  // Its own generator, deliberately. Sharing the course's meant that every
+  // rejected candidate — a kicker moving, a new exclusion zone anywhere on the
+  // mountain — skipped the draws that place the *next* tree, and the whole
+  // forest reshuffled. A stand of trees should not move because a chairlift was
+  // built four hundred metres away.
+  const rng = makeRng(seed);
   const placements = VARIANTS.map(() => []);
   const colliders = [];
 

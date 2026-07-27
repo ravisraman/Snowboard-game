@@ -4,7 +4,8 @@ import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
 import { buildForest } from '../world/Trees.js';
 import { buildVillage } from '../world/Village.js';
-import { buildSky, buildMountains, buildLighting, HORIZON_COLOR } from '../world/Environment.js';
+import { buildSky, buildMountains, buildClouds, buildLighting, HORIZON_COLOR } from '../world/Environment.js';
+import { buildResort } from '../world/Resort.js';
 import { Rider, RIDER_TUNING } from '../entities/Rider.js';
 import { Skiers } from '../entities/Skiers.js';
 import { SnowSpray } from '../fx/SnowSpray.js';
@@ -89,6 +90,7 @@ export class Game {
     this.backdrop = new THREE.Group();
     this.backdrop.add(buildSky());
     this.backdrop.add(buildMountains());
+    if (this.quality.clouds !== false) this.backdrop.add(buildClouds());
     this.scene.add(this.backdrop);
 
     this.lights = buildLighting(this.scene, this.quality);
@@ -99,7 +101,11 @@ export class Game {
     const village = buildVillage(course);
     this.scene.add(village.group);
 
-    const forest = buildForest(course, { exclude: village.exclude, quality: this.quality });
+    this.resort = buildResort(course, this.quality);
+    this.scene.add(this.resort.group);
+
+    const keepClear = (x, z) => village.exclude(x, z) || this.resort.exclude(x, z);
+    const forest = buildForest(course, { exclude: keepClear, quality: this.quality });
     this.scene.add(forest.group);
     this.trees = forest.colliders;
 
@@ -330,6 +336,7 @@ export class Game {
 
     this.touch.setAirborne(!this.rider.grounded && this.state === 'riding');
     this.skiers.update(sdt, this.rider.position.z);
+    this.resort.update(sdt);
     this.audio.update(this.rider, this.state === 'riding');
     this.tracks.update(this.rider);
     this._emitSpray(sdt);
