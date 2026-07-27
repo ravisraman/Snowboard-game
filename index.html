@@ -38,9 +38,12 @@
       <div id="powder-tag" class="powder-tag">DEEP POWDER</div>
     </div>
 
-    <button id="btn-mute" class="mute" type="button" aria-label="Toggle sound">
-      <span class="mute-on">SOUND</span><span class="mute-off">MUTED</span>
-    </button>
+    <div class="corner-buttons">
+      <button id="btn-help" class="mute" type="button" aria-label="Controls and pause">?</button>
+      <button id="btn-mute" class="mute" type="button" aria-label="Toggle sound">
+        <span class="mute-on">SOUND</span><span class="mute-off">MUTED</span>
+      </button>
+    </div>
 
     <!-- ============ Shown when the rider grinds to a halt ============ -->
     <div id="stuck-prompt" class="stuck">
@@ -93,8 +96,19 @@
           <div class="ctrl"><span class="tkey">In the air</span><span>Drag to spin, hold GRAB</span></div>
         </div>
         <button id="btn-start" class="cta">DROP IN</button>
-        <p class="hint">Stay on the corduroy — deep powder is fast to bog you down.</p>
+        <p class="hint">
+          Stay on the corduroy — deep powder is fast to bog you down.
+          <button id="btn-help-title" class="linkish" type="button">All controls &amp; tricks</button>
+        </p>
         <p class="hint touch-only">Turn your phone sideways for the best view.</p>
+      </section>
+
+      <!-- Controls, and the pause screen: the same panel either way -->
+      <section id="screen-help" class="screen hidden">
+        <h2 class="verdict help">CONTROLS</h2>
+        <div id="help-body" class="help-body"></div>
+        <button id="btn-resume" class="cta">BACK</button>
+        <p class="hint keys-only">Press <kbd>Esc</kbd> to close</p>
       </section>
 
       <!-- Crash -->

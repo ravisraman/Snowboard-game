@@ -1,4 +1,5 @@
 import { clamp, formatTime } from './mathx.js';
+import { CONTROL_GROUPS, TRICK_GUIDE, SCORING_NOTE } from './Controls.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and
@@ -34,6 +35,11 @@ export class HUD {
       title: $('screen-title'),
       crash: $('screen-crash'),
       finish: $('screen-finish'),
+      help: $('screen-help'),
+      helpBody: $('help-body'),
+      helpBtn: $('btn-help'),
+      helpTitleBtn: $('btn-help-title'),
+      resume: $('btn-resume'),
       crashReason: $('crash-reason'),
       crashTime: $('crash-time'),
       crashDist: $('crash-dist'),
@@ -62,6 +68,47 @@ export class HUD {
     };
     this.best = this._load(BEST_TIME_KEY);
     this.bestScore = this._load(BEST_SCORE_KEY);
+    this._buildHelp();
+  }
+
+  /**
+   * Renders the controls panel from the one table in `Controls.js`. Built once
+   * at startup — it is the same list every time it is opened, and the pause
+   * screen is not the moment to be assembling DOM.
+   */
+  _buildHelp() {
+    const body = this.el.helpBody;
+    if (!body) return;
+
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const html = [];
+
+    for (const group of CONTROL_GROUPS) {
+      html.push(`<h3 class="help-heading">${esc(group.title)}</h3>`);
+
+      // Keyboard and touch get their own list, so a row without a touch
+      // equivalent simply isn't offered to a phone.
+      const keyRows = group.rows
+        .map((r) => `<div class="ctrl">${r.keys.map((k) => `<kbd>${esc(k)}</kbd>`).join('')}<span>${esc(r.label)}</span></div>`)
+        .join('');
+      html.push(`<div class="controls keys-only">${keyRows}</div>`);
+
+      const touchRows = group.rows
+        .filter((r) => r.touch)
+        .map((r) => `<div class="ctrl"><span class="tkey">${esc(r.touch)}</span><span>${esc(r.label)}</span></div>`)
+        .join('');
+      html.push(`<div class="controls touch-only">${touchRows}</div>`);
+    }
+
+    html.push('<h3 class="help-heading">What scores</h3>');
+    html.push('<dl class="help-tricks">');
+    for (const t of TRICK_GUIDE) {
+      html.push(`<div><dt>${esc(t.name)}</dt><dd>${esc(t.detail)}</dd></div>`);
+    }
+    html.push('</dl>');
+    html.push(`<p class="help-note">${esc(SCORING_NOTE)}</p>`);
+
+    body.innerHTML = html.join('');
   }
 
   _load(key) {
@@ -97,13 +144,16 @@ export class HUD {
     return false;
   }
 
-  onAction({ onStart, onRestart, onRescue, onMute }) {
+  onAction({ onStart, onRestart, onRescue, onMute, onHelp }) {
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
     this.el.again.addEventListener('click', onRestart);
     this.el.rescue?.addEventListener('click', onRescue);
     this.el.restartRun?.addEventListener('click', onRestart);
     this.el.mute?.addEventListener('click', onMute);
+    this.el.helpBtn?.addEventListener('click', onHelp);
+    this.el.helpTitleBtn?.addEventListener('click', onHelp);
+    this.el.resume?.addEventListener('click', onHelp);
   }
 
   setMuted(muted) {
@@ -123,16 +173,36 @@ export class HUD {
   }
 
   showScreen(name) {
-    for (const key of ['title', 'crash', 'finish']) {
-      this.el[key].classList.toggle('hidden', key !== name);
+    this.currentScreen = name;
+    // The panel already carries a BACK button, and on a phone the corner pair
+    // would otherwise sit on top of the list.
+    document.body.classList.toggle('help-open', name === 'help');
+    for (const key of ['title', 'crash', 'finish', 'help']) {
+      const el = this.el[key];
+      el.classList.toggle('hidden', key !== name);
+      el.classList.remove('enter');
     }
     this.el.overlay.classList.remove('hidden');
+    // Restart the entrance animation on the screen being shown; the reflow is
+    // what stops the class removal and re-add being coalesced into nothing.
+    const shown = this.el[name];
+    if (shown) {
+      void shown.offsetWidth;
+      shown.classList.add('enter');
+    }
     // Let the button take focus so Enter/Space works without a mouse.
-    const btn = { title: this.el.start, crash: this.el.retry, finish: this.el.again }[name];
+    const btn = {
+      title: this.el.start,
+      crash: this.el.retry,
+      finish: this.el.again,
+      help: this.el.resume,
+    }[name];
     if (btn) setTimeout(() => btn.focus({ preventScroll: true }), 60);
   }
 
   hideOverlay() {
+    this.currentScreen = null;
+    document.body.classList.remove('help-open');
     this.el.overlay.classList.add('hidden');
     document.activeElement?.blur?.();
   }

@@ -379,6 +379,55 @@ await page.click('#btn-mute');
 await page.waitForTimeout(320);
 audio.muted = await page.evaluate(() => +window.game.audio.master.gain.value.toFixed(3));
 
+/* ------------------------------------------------------------------
+ * The controls panel and the pause it implies. This needs the real frame
+ * loop running — the whole point of the assertion is that wall-clock time
+ * passes and the run clock does not move with it.
+ * ---------------------------------------------------------------- */
+
+await page.goto(URL, { waitUntil: 'load' });
+await page.waitForFunction(() => !!window.game, null, { timeout: 90000 });
+
+const ui = {};
+
+// From the title screen the panel is just another page, and closing it puts
+// back the screen you came from.
+await page.click('#btn-help-title');
+ui.fromTitle = await page.evaluate(() => window.game.hud.currentScreen);
+await page.click('#btn-resume');
+ui.backToTitle = await page.evaluate(() => window.game.hud.currentScreen);
+
+await page.click('#btn-start');
+await page.waitForTimeout(500);
+await page.click('#btn-help');
+ui.pausedState = await page.evaluate(() => window.game.state);
+
+const elapsedAtPause = await page.evaluate(() => window.game.elapsed);
+await page.waitForTimeout(900);
+ui.clockDrift = await page.evaluate((before) => +(window.game.elapsed - before).toFixed(4), elapsedAtPause);
+
+await page.click('#btn-resume');
+// Generous, because this renders through SwiftShader: a couple of frames here
+// can take the best part of a second, and the assertion is only that the clock
+// starts moving again at all.
+await page.waitForTimeout(2000);
+ui.resumedState = await page.evaluate(() => window.game.state);
+ui.clockRuns = await page.evaluate((before) => window.game.elapsed > before, elapsedAtPause);
+
+// Rescue teleports the rider, so it must not fire on a stray key press — only
+// once the game has actually offered it.
+ui.rescue = await page.evaluate(() => {
+  const g = window.game;
+  g.isStuck = false;
+  const z0 = g.rider.position.z;
+  const x0 = g.rider.position.x;
+  g.rescue();
+  const ignored = g.rider.position.z === z0 && g.rider.position.x === x0;
+  g.isStuck = true;
+  g.rescue();
+  return { ignoredWhenNotStuck: ignored, actedWhenStuck: g.rider.speed === 10 };
+});
+
 await browser.close();
 
 /* ---------------------------------------------------------------- */
@@ -424,6 +473,15 @@ const checks = [
   ['one-shots fire without throwing', audio.oneShots === 'ok', audio.oneShots],
   ['mute silences the master', audio.muted === 0, `master ${audio.muted}`],
   ['kickers get hit on the way down', results.run.airs >= 3, `${results.run.airs} airs`],
+  ['the controls panel opens from the title and closes back to it',
+    ui.fromTitle === 'help' && ui.backToTitle === 'title', `${ui.fromTitle} -> ${ui.backToTitle}`],
+  ['opening the controls mid-run pauses it', ui.pausedState === 'paused', ui.pausedState],
+  ['a pause stops the clock', ui.clockDrift === 0, `${ui.clockDrift}s of drift over 0.9s paused`],
+  ['closing it resumes the run', ui.resumedState === 'riding' && ui.clockRuns,
+    `${ui.resumedState}, clock ${ui.clockRuns ? 'running' : 'stopped'}`],
+  ['rescue only fires once you are bogged down',
+    ui.rescue.ignoredWhenNotStuck && ui.rescue.actedWhenStuck,
+    ui.rescue.ignoredWhenNotStuck ? 'ignored mid-run, acted when offered' : 'teleported on a stray press'],
   ['the track ribbon wraps its ring buffer', results.tracks.wrapped, `filled the whole buffer`],
   ['the ribbon holds no NaN vertices', results.tracks.nanVertices === 0, `${results.tracks.nanVertices} bad vertices`],
   ['every visible ribbon vertex sits on the snow', results.tracks.worstHeightError < 0.001,

@@ -69,6 +69,7 @@ export class Game {
       onRestart: () => this.restart(),
       onRescue: () => this.rescue(),
       onMute: () => this.hud.setMuted(this.audio.toggleMuted()),
+      onHelp: () => this.toggleHelp(),
     });
     this.hud.setMuted(this.audio.muted);
 
@@ -131,10 +132,48 @@ export class Game {
     this.crashTimer = 0;
     this.finishTimer = 0;
     this.stuckTimer = 0;
+    this.isStuck = false;
     this._finishShown = false;
     this.hud.setStuck(false);
     this.hud.resetTicker();
     this.hud.update(this.rider, 0, 0, this.score);
+  }
+
+  /**
+   * The controls panel, which doubles as the pause screen.
+   *
+   * Mid-run it stops the world — the clock included, since reading the controls
+   * should never cost you a run. From any of the overlay screens it is just
+   * another page, and closing it puts back the one you came from.
+   */
+  toggleHelp() {
+    if (this.state === 'paused') {
+      this.state = 'riding';
+      this.input.clear();
+      this.hud.hideOverlay();
+      this.hud.setHudVisible(true);
+      this.touch.setVisible(true);
+      return;
+    }
+
+    if (this.state === 'riding') {
+      this.state = 'paused';
+      this._helpReturn = null;
+      this.input.clear();
+      this.audio.quiet();
+      this.touch.setVisible(false);
+      this.hud.setStuck(false);
+      this.hud.showScreen('help');
+      return;
+    }
+
+    // On an overlay screen already: swap to the panel and back again.
+    if (this.hud.currentScreen === 'help') {
+      this.hud.showScreen(this._helpReturn ?? 'title');
+    } else if (this.hud.currentScreen) {
+      this._helpReturn = this.hud.currentScreen;
+      this.hud.showScreen('help');
+    }
   }
 
   start() {
@@ -162,7 +201,10 @@ export class Game {
    * costs you the run rather than ending it.
    */
   rescue() {
-    if (this.state !== 'riding') return;
+    // Only once you are actually bogged down. Ungated, a stray key press drops
+    // the rider out of a jump and onto the piste, which reads as the game
+    // teleporting you for no reason.
+    if (this.state !== 'riding' || !this.isStuck) return;
     const r = this.rider;
     const z = r.position.z;
     r.position.set(this.course.centerX(z), 0, z);
@@ -174,6 +216,7 @@ export class Game {
     this.tracks.lift();
     this.chase.reset(r);
     this.stuckTimer = 0;
+    this.isStuck = false;
     this.hud.setStuck(false);
     this.spray.burst(r.position, 40, 4, 0.6);
   }
@@ -208,6 +251,19 @@ export class Game {
     // Clamp dt so an alt-tab or a stall can never tunnel the rider through the
     // world; the integration is stable well past this — it's collision that cares.
     const dt = Math.min(rawDt, 1 / 20);
+
+    // Opening the controls freezes everything, the clock included — looking up
+    // what a button does should never cost you the run.
+    if (this.input.helpPressed) {
+      this.input.endFrame();
+      this.toggleHelp();
+      return;
+    }
+    if (this.state === 'paused') {
+      this.audio.quiet();
+      this.input.endFrame();
+      return;
+    }
 
     if (this.state === 'title') {
       this.previewTime += dt;
@@ -301,7 +357,8 @@ export class Game {
   _trackStuck(dt) {
     const crawling = this.rider.grounded && this.rider.speed < STUCK_SPEED;
     this.stuckTimer = crawling ? this.stuckTimer + dt : 0;
-    this.hud.setStuck(this.stuckTimer > STUCK_SECONDS);
+    this.isStuck = this.stuckTimer > STUCK_SECONDS;
+    this.hud.setStuck(this.isStuck);
   }
 
   _updateBackdrop() {
