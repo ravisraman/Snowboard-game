@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { Game } from './core/Game.js';
+import { detectTier, qualityFor, isTouchDevice } from './core/Quality.js';
 
 /**
  * Bootstrap: renderer, the frame loop, and window plumbing.
  */
+
+const quality = qualityFor(detectTier());
+if (isTouchDevice()) document.body.classList.add('is-touch');
 
 const canvas = document.getElementById('scene');
 
@@ -14,15 +18,15 @@ const renderer = new THREE.WebGLRenderer({
   stencil: false,
 });
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatio));
+renderer.shadowMap.enabled = quality.shadows;
+renderer.shadowMap.type = quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 // Snow blows out badly under a linear response; ACES keeps the highlights.
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.99;
 
-const game = new Game(renderer);
+const game = new Game(renderer, quality);
 
 function resize() {
   const width = window.innerWidth;
@@ -32,6 +36,8 @@ function resize() {
 }
 
 window.addEventListener('resize', resize);
+// iOS fires orientationchange before the viewport has settled.
+window.addEventListener('orientationchange', () => setTimeout(resize, 250));
 resize();
 
 // Warm the shader cache before the first frame so the drop-in isn't a stutter.

@@ -33,8 +33,8 @@ const TERRAIN_REACH = 620;
 /** Length of one frustum-cullable slice of slope, in metres. */
 const CHUNK_LENGTH = 190;
 
-export function buildTerrain(course) {
-  const offsets = buildOffsetColumns();
+export function buildTerrain(course, quality = {}) {
+  const offsets = buildOffsetColumns(quality.skirtStep ?? 28);
   const zFrom = -70;
   const zTo = COURSE.length + 420;
   const dz = 3.5;
@@ -177,7 +177,7 @@ function computeGridNormals(positions, rows, cols) {
  * Column offsets: 1.5 m across the piste, opening up to a coarse skirt that
  * carries the snowfields out past the fog so the world never shows an edge.
  */
-function buildOffsetColumns() {
+function buildOffsetColumns(skirtStep) {
   const half = [];
   let u = 0;
   while (u < TERRAIN_REACH) {
@@ -186,7 +186,7 @@ function buildOffsetColumns() {
     else if (u < 42) u += 3;
     else if (u < 95) u += 6.5;
     else if (u < COURSE.halfWidth) u += 12;
-    else u += 28;
+    else u += skirtStep;
   }
   half.push(TERRAIN_REACH);
   const mirrored = half.slice(1).map((v) => -v).reverse();

@@ -158,7 +158,9 @@ function buildPineGeometry(v) {
  * Scatters trees over the slope and returns instanced meshes plus a
  * z-bucketed collider list.
  */
-export function buildForest(course, { exclude } = {}) {
+export function buildForest(course, { exclude, quality = {} } = {}) {
+  const densityScale = quality.treeDensity ?? 1;
+  const farForest = quality.farForest ?? true;
   const rng = course.rng;
   const placements = VARIANTS.map(() => []);
   const colliders = [];
@@ -181,6 +183,7 @@ export function buildForest(course, { exclude } = {}) {
       } else if (roll < 0.86) {
         u = side * (COURSE.trackHalfWidth + 22 + rng() * 150);
       } else {
+        if (!farForest) continue;
         u = side * (200 + rng() * 230);
       }
       if (Math.abs(u) > 440) continue;
@@ -188,7 +191,7 @@ export function buildForest(course, { exclude } = {}) {
       // Thin the far field out so the near band stays the visual anchor.
       const density = 1 - clamp((Math.abs(u) - 30) / 190, 0, 1) * 0.55;
       if (Math.abs(u) > COURSE.halfWidth - 6 && rng() > 0.8) continue;
-      if (rng() > density * 0.62) continue;
+      if (rng() > density * 0.62 * densityScale) continue;
 
       const zj = z + rng.spread(1.3);
       const cx = course.centerX(zj);

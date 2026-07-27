@@ -20,7 +20,14 @@ export class Input {
     this.down = new Set();
     this.jumpPressed = false;
     this.restartPressed = false;
-    this._anyKey = false;
+
+    /**
+     * Written by the on-screen controls. Steering is analog here, unlike the
+     * keyboard's ±1 — a thumb on a drag pad has a magnitude and it would be a
+     * waste to throw it away, and the edge-angle spring reads any value in
+     * between perfectly happily.
+     */
+    this.touch = { steer: 0, tuck: false, brake: false };
 
     this._onKeyDown = (e) => {
       const action = KEYMAP[e.code];
@@ -48,11 +55,13 @@ export class Input {
   }
 
   get steer() {
-    return (this.down.has('right') ? 1 : 0) - (this.down.has('left') ? 1 : 0);
+    const keys = (this.down.has('right') ? 1 : 0) - (this.down.has('left') ? 1 : 0);
+    const s = keys + this.touch.steer;
+    return s < -1 ? -1 : s > 1 ? 1 : s;
   }
 
-  get tuck() { return this.down.has('tuck'); }
-  get brake() { return this.down.has('brake'); }
+  get tuck() { return this.down.has('tuck') || this.touch.tuck; }
+  get brake() { return this.down.has('brake') || this.touch.brake; }
 
   /** Call once per frame, after the world has read the edge-triggered flags. */
   endFrame() {
@@ -62,6 +71,9 @@ export class Input {
 
   clear() {
     this.down.clear();
+    this.touch.steer = 0;
+    this.touch.tuck = false;
+    this.touch.brake = false;
     this.jumpPressed = false;
     this.restartPressed = false;
   }

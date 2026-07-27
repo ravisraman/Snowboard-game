@@ -235,17 +235,19 @@ export function buildMountains(seed = 909) {
  * Lighting
  * ---------------------------------------------------------------- */
 
-export function buildLighting(scene) {
+export function buildLighting(scene, quality = {}) {
+  const mapSize = quality.shadowMapSize ?? 2048;
+  const extent = quality.shadowExtent ?? 68;
   // Warm, low-ish winter sun raking across the slope from one side.
   const sun = new THREE.DirectionalLight('#fff6e6', 2.6);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.castShadow = quality.shadows !== false;
+  sun.shadow.mapSize.set(mapSize, mapSize);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 460;
-  sun.shadow.camera.left = -68;
-  sun.shadow.camera.right = 68;
-  sun.shadow.camera.top = 68;
-  sun.shadow.camera.bottom = -68;
+  sun.shadow.camera.left = -extent;
+  sun.shadow.camera.right = extent;
+  sun.shadow.camera.top = extent;
+  sun.shadow.camera.bottom = -extent;
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.035;
   scene.add(sun);

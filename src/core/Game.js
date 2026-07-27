@@ -11,6 +11,7 @@ import { SnowSpray } from '../fx/SnowSpray.js';
 import { ChaseCamera } from './ChaseCamera.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
+import { TouchControls } from './TouchControls.js';
 import { clamp } from './mathx.js';
 
 /**
@@ -25,18 +26,20 @@ const OUT_OF_BOUNDS = 148;
 const CRASH_SLOWMO = 1.15;
 
 export class Game {
-  constructor(renderer) {
+  constructor(renderer, quality = {}) {
     this.renderer = renderer;
+    this.quality = quality;
     this.scene = new THREE.Scene();
     // Thick enough that the far snowfields reach the fog colour before the
     // world runs out, so the mountains rise out of haze instead of standing
     // behind a bright seam.
-    this.scene.fog = new THREE.FogExp2(HORIZON_COLOR.getHex(), 0.0026);
+    this.scene.fog = new THREE.FogExp2(HORIZON_COLOR.getHex(), quality.fogDensity ?? 0.0026);
 
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 9000);
     this.chase = new ChaseCamera(this.camera);
     this.input = new Input();
     this.hud = new HUD();
+    this.touch = new TouchControls(this.input);
 
     this._sprayPos = new THREE.Vector3();
 
@@ -71,15 +74,15 @@ export class Game {
     this.backdrop.add(buildMountains());
     this.scene.add(this.backdrop);
 
-    this.lights = buildLighting(this.scene);
+    this.lights = buildLighting(this.scene, this.quality);
 
-    this.scene.add(buildTerrain(course));
+    this.scene.add(buildTerrain(course, this.quality));
     this.scene.add(buildKickers(course));
 
     const village = buildVillage(course);
     this.scene.add(village.group);
 
-    const forest = buildForest(course, { exclude: village.exclude });
+    const forest = buildForest(course, { exclude: village.exclude, quality: this.quality });
     this.scene.add(forest.group);
     this.trees = forest.colliders;
 
@@ -89,7 +92,7 @@ export class Game {
     this.rider = new Rider(course);
     this.scene.add(this.rider.model.root);
 
-    this.spray = new SnowSpray();
+    this.spray = new SnowSpray(this.quality.maxParticles);
     this.scene.add(this.spray.points);
   }
 
@@ -117,6 +120,7 @@ export class Game {
     this.input.clear();
     this.hud.hideOverlay();
     this.hud.setHudVisible(true);
+    this.touch.setVisible(true);
   }
 
   /** Straight back into a fresh run — a retry should never cost a second click. */
@@ -127,6 +131,7 @@ export class Game {
 
   _crash(reason) {
     if (this.state !== 'riding') return;
+    this.touch.setVisible(false);
     this.rider.crash(reason);
     this.state = 'crashing';
     this.crashTimer = 0;
@@ -136,6 +141,7 @@ export class Game {
 
   _finish() {
     if (this.state !== 'riding') return;
+    this.touch.setVisible(false);
     this.state = 'finished';
     this.finishTimer = 0;
     this.finishElapsed = this.elapsed;
@@ -281,6 +287,7 @@ export class Game {
 
   resize(width, height) {
     this.camera.aspect = width / height;
+    this.chase.setAspect(this.camera.aspect);
     this.camera.updateProjectionMatrix();
     this.spray.setViewport(this.renderer.domElement.height, this.camera.fov);
   }

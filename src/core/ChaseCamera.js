@@ -25,6 +25,18 @@ export class ChaseCamera {
     this.fov = this.baseFov;
     this.shake = 0;
     this._initialised = false;
+    this.portrait = 0;
+  }
+
+  /**
+   * A phone held upright is a tall, narrow window. The camera's field of view
+   * is vertical, so portrait spends it all on sky and foreground and leaves a
+   * horizontal view barely wider than the piste — you cannot see a tree until
+   * it is level with you. Standing further back, widening a little and aiming
+   * lower buys back the width without bending the lens into a fisheye.
+   */
+  setAspect(aspect) {
+    this.portrait = clamp((1.25 - aspect) / 0.75, 0, 1);
   }
 
   reset(rider) {
@@ -59,8 +71,8 @@ export class ChaseCamera {
     this.yaw += angleDelta(this.yaw, rider.yaw) * (snap ? 1 : 1 - Math.exp(-3.6 * dt));
 
     // 2. Ideal position: behind and above, pulled back and swung wide with speed.
-    const dist = 7.3 + speedT * 3.2 + (rider.crashed ? 3 : 0);
-    const height = 2.95 + speedT * 0.7 + clamp((p.y - rider.course.groundHeight(p.x, p.z)) * 0.25, 0, 2.5);
+    const dist = (7.3 + speedT * 3.2 + (rider.crashed ? 3 : 0)) * (1 + this.portrait * 0.4);
+    const height = 2.95 + this.portrait * 1.1 + speedT * 0.7 + clamp((p.y - rider.course.groundHeight(p.x, p.z)) * 0.25, 0, 2.5);
     const side = -lean * 2.3;
 
     const sy = Math.sin(this.yaw);
@@ -87,7 +99,7 @@ export class ChaseCamera {
     const lead = 7 + speedT * 8;
     const aheadX = p.x + Math.sin(rider.yaw) * lead;
     const aheadZ = p.z + Math.cos(rider.yaw) * lead;
-    const aheadY = rider.course.terrainHeight(aheadX, aheadZ) + 2.0;
+    const aheadY = rider.course.terrainHeight(aheadX, aheadZ) + 2.0 - this.portrait * 2.6;
     this._target.set(aheadX, Math.max(aheadY, p.y + 0.4), aheadZ);
     if (snap) this._look.copy(this._target);
     else {
@@ -114,7 +126,7 @@ export class ChaseCamera {
     this.camera.lookAt(this._look);
 
     // Field of view opens up with speed: the cheapest, most effective speed cue.
-    const targetFov = this.baseFov + speedT * 15 + (rider.tucking ? 3 : 0);
+    const targetFov = this.baseFov + this.portrait * 12 + speedT * 15 + (rider.tucking ? 3 : 0);
     const next = snap ? targetFov : damp(this.fov, targetFov, 2.6, dt);
     if (Math.abs(next - this.fov) > 0.01 || snap) {
       this.fov = next;

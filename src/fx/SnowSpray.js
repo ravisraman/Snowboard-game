@@ -11,12 +11,14 @@ import { clamp } from '../core/mathx.js';
  * more grains, launched wider and faster.
  */
 
-const MAX_PARTICLES = 4200;
+const DEFAULT_MAX_PARTICLES = 4200;
 const GRAVITY = 7.5;
 const DRAG = 1.9;
 
 export class SnowSpray {
-  constructor() {
+  constructor(maxParticles = DEFAULT_MAX_PARTICLES) {
+    const MAX_PARTICLES = maxParticles;
+    this.max = MAX_PARTICLES;
     this.count = MAX_PARTICLES;
 
     this.px = new Float32Array(MAX_PARTICLES);
@@ -104,7 +106,7 @@ export class SnowSpray {
 
   _spawn(x, y, z, vx, vy, vz, size, life, grow) {
     const i = this.cursor;
-    this.cursor = (this.cursor + 1) % MAX_PARTICLES;
+    this.cursor = (this.cursor + 1) % this.max;
     this.px[i] = x; this.py[i] = y; this.pz[i] = z;
     this.vx[i] = vx; this.vy[i] = vy; this.vz[i] = vz;
     this.life[i] = life;
@@ -207,7 +209,7 @@ export class SnowSpray {
     const size = this._aSize;
     const alpha = this._aAlpha;
 
-    for (let i = 0; i < MAX_PARTICLES; i++) {
+    for (let i = 0; i < this.max; i++) {
       const l = this.life[i];
       if (l <= 0) {
         if (alpha[i] !== 0) alpha[i] = 0;

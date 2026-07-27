@@ -9,15 +9,45 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-| Key | |
-| --- | --- |
-| <kbd>A</kbd> / <kbd>D</kbd> | Carve onto the heel or toe edge |
-| <kbd>W</kbd> | Tuck for speed |
-| <kbd>S</kbd> | Brake and slide |
-| <kbd>Space</kbd> | Ollie |
-| <kbd>R</kbd> | Restart |
+| Key | Touch | |
+| --- | --- | --- |
+| <kbd>A</kbd> / <kbd>D</kbd> | drag the left thumb | Carve onto the heel or toe edge |
+| <kbd>W</kbd> | hold TUCK | Tuck for speed |
+| <kbd>S</kbd> | hold BRAKE | Brake and slide |
+| <kbd>Space</kbd> | tap OLLIE | Ollie |
+| <kbd>R</kbd> | tap RIDE AGAIN | Restart |
 
 Arrow keys work too. Your best time is kept in `localStorage`.
+
+## Phones
+
+On a touch device the game swaps to on-screen controls and a lighter quality
+tier automatically; append `?quality=mobile` or `?quality=desktop` to override.
+Landscape is the better view, but portrait plays fine.
+
+Steering is a *relative* drag: wherever your left thumb lands becomes the
+centre, and the offset from there is the edge angle. On a screen with no rim
+to feel for, an absolute stick means hunting for a target you can't see under
+your own thumb. The origin is sticky too, so flipping from a hard left carve
+to a hard right one is one thumb-width of travel rather than a trip back
+across the pad. Unlike the keyboard's ±1, touch steering is analog — the
+edge-angle spring reads the in-between values happily.
+
+The mobile tier cuts in cost order: pixels first (a handset renders at 3x
+device pixel ratio, nine times the fragment work of 1x), then the shadow pass,
+then geometry. The camera also adapts — a phone held upright is a tall, narrow
+window, and since the field of view is vertical, portrait otherwise spends it
+all on sky and leaves a horizontal view barely wider than the piste. In
+portrait the camera stands further back, widens a little and aims lower.
+
+## Playing without a server
+
+```bash
+npm run bundle     # -> dist/alpine-carve.html
+```
+
+Since nothing is loaded over the network, the whole game folds into one HTML
+file you can open directly, email, or drop on any static host.
 
 ## What's here
 
