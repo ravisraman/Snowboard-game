@@ -173,6 +173,103 @@ kbd {
 
 .powder-tag.on { opacity: 0.95; }
 
+/* ======================= Stuck prompt ======================== */
+
+/* Sits high enough to clear both thumbs on a phone and the speed readout on a
+   desktop, and never covers the rider. */
+.stuck {
+  position: fixed;
+  left: 50%;
+  top: 28%;
+  transform: translate(-50%, -6px);
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px 26px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(11, 28, 47, 0.72);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 14px 40px rgba(6, 18, 32, 0.4);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 4;
+}
+
+.stuck.on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.stuck-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--orange);
+}
+
+.stuck-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  opacity: 0.72;
+}
+
+.stuck-hint kbd { font-size: 0.86em; }
+
+.stuck-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.stuck-btn {
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(180deg, #ff8f52, var(--orange));
+  color: #fff;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+
+.stuck-btn:hover { filter: brightness(1.07); }
+.stuck-btn:active { transform: translateY(1px); }
+.stuck-btn:focus-visible { outline: 3px solid rgba(255, 255, 255, 0.8); outline-offset: 3px; }
+
+.stuck-btn-quiet {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.stuck-btn kbd {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: none;
+  font-size: 0.8em;
+}
+
+@media (max-height: 480px) {
+  .stuck { top: 16%; padding: 12px 20px 14px; gap: 7px; }
+  .stuck-hint { font-size: 11.5px; }
+  .stuck-btn { padding: 9px 16px; font-size: 12.5px; }
+}
+
 /* ====================== Touch controls ======================= */
 
 /* Which control legend the title screen shows is decided at runtime, from

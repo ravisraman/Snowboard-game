@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, damp } from '../core/mathx.js';
+import { clamp, damp, smoothstep } from '../core/mathx.js';
 
 /**
  * The snowboarder: model, and the carving physics that give the game its feel.
@@ -22,12 +22,17 @@ const TUNING = {
   dragTuck: 0.55,         // multiplier while tucked
   dragBrake: 0.020,
   dragPowder: 0.019,
-  frictionBase: 0.35,     // constant snow friction (m/s^2)
+  frictionBase: 0.35,     // snow friction (m/s^2) at full ploughing speed
   frictionPowder: 5.5,
+  ploughSpeed: 4,         // speed by which snow resistance has fully built up
   tuckThrust: 1.6,
 
   maxLean: 0.62,          // ~35 degrees of edge angle
   leanSpeedFloor: 7,      // m/s at which full edge angle becomes available
+  pivotSpeed: 8,          // below this the board can be shuffled round on the spot
+  pivotRate: 1.5,         // rad/s of that shuffle at a standstill
+  skateSpeed: 6,          // below this the jump button skates instead of ollies
+  skatePush: 3.4,         // m/s gained per skate
   leanStiffness: 36,      // spring toward the commanded edge
   leanDamping: 8.5,
   maxCurvature: 1 / 15.5, // tightest carve radius, in 1/metres
@@ -84,6 +89,7 @@ export class Rider {
     this.tucking = false;
     this.justLaunched = false;
     this.justLanded = 0;
+    this.skated = 0;
 
     this._tumble = new THREE.Vector3();
     this._modelPitch = 0;
@@ -152,6 +158,13 @@ export class Rider {
       // Yaw rate = speed x curvature: a carve of fixed radius, exactly as a
       // real board's sidecut behaves. Turning gets quicker as you go faster.
       this.yaw += curvature * this.speed * dt;
+
+      // Carving needs speed, so at a crawl the edge does nothing — which left
+      // a rider who stopped facing across the hill unable to turn back down it.
+      // Hopping the board round on the spot is what you'd actually do, and it
+      // fades out as soon as there's enough speed to hold an edge.
+      const pivot = 1 - clamp(this.speed / TUNING.pivotSpeed, 0, 1);
+      this.yaw += input.steer * TUNING.pivotRate * pivot * dt;
     } else {
       this.yaw += input.steer * TUNING.airSteer * dt;
     }
@@ -168,7 +181,14 @@ export class Rider {
     let accel = 0;
     if (this.grounded) {
       accel += -TUNING.gravity * slope / Math.sqrt(1 + slope * slope);
-      accel -= TUNING.frictionBase + this.powder * TUNING.frictionPowder;
+
+      // Snow resists by being ploughed out of the way, so the resistance has
+      // to fall away as the board slows. Modelling it as a constant made deep
+      // snow an inescapable dead end: at 5.85 m/s^2 it outweighs gravity's pull
+      // on every gradient this course has, so a rider who stopped in powder
+      // could never start again on any slope, however steep.
+      const plough = smoothstep(0, TUNING.ploughSpeed, this.speed);
+      accel -= (TUNING.frictionBase + this.powder * TUNING.frictionPowder) * plough;
 
       let drag = TUNING.dragBase + this.powder * TUNING.dragPowder;
       if (this.tucking) {
@@ -198,11 +218,19 @@ export class Rider {
     const ground = c.groundHeight(this.position.x, this.position.z);
     this.justLaunched = false;
     this.justLanded = 0;
+    this.skated = 0;
 
     if (input.jumpPressed && this.grounded) {
-      this.grounded = false;
-      this.vy = Math.max(this.vy, 0) + TUNING.ollie;
-      this.justLaunched = true;
+      if (this.speed < TUNING.skateSpeed) {
+        // Too slow to ollie usefully, so the same button skates instead: a
+        // shove down the fall line to get moving again.
+        this.speed = Math.min(TUNING.maxSpeed, this.speed + TUNING.skatePush);
+        this.skated = 1;
+      } else {
+        this.grounded = false;
+        this.vy = Math.max(this.vy, 0) + TUNING.ollie;
+        this.justLaunched = true;
+      }
     }
 
     /* ---- 5. Vertical: one rule for riding, launching and landing ------

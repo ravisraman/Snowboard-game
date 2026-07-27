@@ -25,6 +25,10 @@ import { clamp } from './mathx.js';
 const OUT_OF_BOUNDS = 148;
 const CRASH_SLOWMO = 1.15;
 
+/** Below this speed, for this long, the rider is offered a way out. */
+const STUCK_SPEED = 2.2;
+const STUCK_SECONDS = 2.5;
+
 export class Game {
   constructor(renderer, quality = {}) {
     this.renderer = renderer;
@@ -54,6 +58,7 @@ export class Game {
     this.hud.onAction({
       onStart: () => this.start(),
       onRestart: () => this.restart(),
+      onRescue: () => this.rescue(),
     });
 
     this.reset();
@@ -108,7 +113,9 @@ export class Game {
     this.elapsed = 0;
     this.crashTimer = 0;
     this.finishTimer = 0;
+    this.stuckTimer = 0;
     this._finishShown = false;
+    this.hud.setStuck(false);
     this.hud.resetTicker();
     this.hud.update(this.rider, 0, 0);
   }
@@ -129,9 +136,31 @@ export class Game {
     this.start();
   }
 
+  /**
+   * Drop the rider back onto the groomer where they are, pointed down the
+   * fall line with enough speed to get going. The timer keeps running, so it
+   * costs you the run rather than ending it.
+   */
+  rescue() {
+    if (this.state !== 'riding') return;
+    const r = this.rider;
+    const z = r.position.z;
+    r.position.set(this.course.centerX(z), 0, z);
+    r.yaw = this.course.trackHeading(z);
+    r.speed = 10;
+    r.lean = 0;
+    r.leanVel = 0;
+    r.settle();
+    this.chase.reset(r);
+    this.stuckTimer = 0;
+    this.hud.setStuck(false);
+    this.spray.burst(r.position, 40, 4, 0.6);
+  }
+
   _crash(reason) {
     if (this.state !== 'riding') return;
     this.touch.setVisible(false);
+    this.hud.setStuck(false);
     this.rider.crash(reason);
     this.state = 'crashing';
     this.crashTimer = 0;
@@ -142,6 +171,7 @@ export class Game {
   _finish() {
     if (this.state !== 'riding') return;
     this.touch.setVisible(false);
+    this.hud.setStuck(false);
     this.state = 'finished';
     this.finishTimer = 0;
     this.finishElapsed = this.elapsed;
@@ -165,9 +195,16 @@ export class Game {
       return;
     }
 
-    if (this.input.restartPressed && this.state !== 'riding') {
+    // Restart is available at any time, including mid-run: being wedged
+    // somewhere unrecoverable should never mean sitting through a timer.
+    if (this.input.restartPressed) {
       this.input.endFrame();
       this.restart();
+      return;
+    }
+    if (this.input.rescuePressed && this.state === 'riding') {
+      this.input.endFrame();
+      this.rescue();
       return;
     }
 
@@ -195,6 +232,7 @@ export class Game {
       this.elapsed += dt;
       this.rider.update(sdt, this.input);
       this._checkHazards();
+      this._trackStuck(dt);
     } else if (this.state === 'finished') {
       // Coast into the village with the input ignored.
       this.rider.update(sdt, COASTING);
@@ -224,6 +262,17 @@ export class Game {
    * of descent later the camera is below the peaks' bases and the whole range
    * hangs upside down out of the sky.
    */
+  /**
+   * Watches for the rider grinding to a halt — bogged in deep snow, stopped on
+   * the runout, or pointed back up the hill — and offers a way out rather than
+   * leaving them to work out that the run is over.
+   */
+  _trackStuck(dt) {
+    const crawling = this.rider.grounded && this.rider.speed < STUCK_SPEED;
+    this.stuckTimer = crawling ? this.stuckTimer + dt : 0;
+    this.hud.setStuck(this.stuckTimer > STUCK_SECONDS);
+  }
+
   _updateBackdrop() {
     this.backdrop.position.copy(this.camera.position);
   }

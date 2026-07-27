@@ -4,7 +4,8 @@
  * Boots the game in Chromium, takes over the frame loop so simulated time is
  * independent of render speed, and asserts the handful of properties that make
  * the game playable: a carve turns at a sane radius, powder actually bogs you
- * down, every kicker on the course launches, and the run is completable.
+ * down without ever trapping you, every kicker on the course launches, and the
+ * run is completable.
  *
  *   npm run dev          # in another shell
  *   npm run check
@@ -72,6 +73,56 @@ const results = await page.evaluate(() => {
       kmhAfterPowder: +(offPiste * 3.6).toFixed(0),
       kmhAfterPiste: +(r.speed * 3.6).toFixed(0),
     };
+  }
+
+  /* You must never be able to come to a permanent halt. */
+  {
+    const spots = [
+      ['powder, mid-slope', 700, 30],
+      ['powder, steep pitch', 900, 34],
+      ['powder, village runout', 2800, 26],
+      ['piste, village runout', 2820, 0],
+    ];
+    const stuck = [];
+    for (const [label, z, u] of spots) {
+      const tan = c.trackTangent(z);
+      r.reset();
+      r.position.set(c.centerX(z) + u * tan.z, 0, z - u * tan.x);
+      r.yaw = c.trackHeading(z);
+      r.speed = 0;
+      r.settle();
+      step(600, NONE);                       // 5 s from a dead stop, no input
+      stuck.push({ where: label, kmhAfter5s: +(r.speed * 3.6).toFixed(1) });
+    }
+
+    // And from a standstill pointed straight back up the hill, which the
+    // carve alone cannot recover from because carving needs speed.
+    r.reset();
+    r.position.set(c.centerX(700), 0, 700);
+    r.yaw = Math.PI;
+    r.speed = 0;
+    r.settle();
+    let turned = 0;
+    for (let i = 0; i < 480; i++) {
+      r.update(dt, { ...NONE, steer: 1 });   // 4 s of holding one way
+      turned = Math.abs(r.yaw - Math.PI);
+    }
+    out.unstick = {
+      spots: stuck,
+      slowestKmh: Math.min(...stuck.map((s) => s.kmhAfter5s)),
+      uphillPivotDeg: +((turned * 180) / Math.PI).toFixed(0),
+    };
+  }
+
+  /* The skate shove has to work when you are too slow to ollie. */
+  {
+    r.reset();
+    r.position.set(c.centerX(700), 0, 700);
+    r.yaw = c.trackHeading(700);
+    r.speed = 0;
+    r.settle();
+    r.update(dt, { ...NONE, jumpPressed: true });
+    out.skate = { kmhFromStandstill: +(r.speed * 3.6).toFixed(1), stayedGrounded: r.grounded };
   }
 
   /* Every kicker on the course has to actually send you. */
@@ -145,6 +196,12 @@ const checks = [
   ['carve turns 35-80 deg/s', results.carve.degPerSec > 35 && results.carve.degPerSec < 80, `${results.carve.degPerSec} deg/s`],
   ['powder costs real speed', results.powder.kmhAfterPowder < results.powder.kmhAfterPiste * 0.7,
     `${results.powder.kmhAfterPowder} vs ${results.powder.kmhAfterPiste} km/h`],
+  ['never permanently stuck', results.unstick.slowestKmh > 3,
+    results.unstick.spots.map((s) => `${s.where}: ${s.kmhAfter5s} km/h`).join(', ')],
+  ['can pivot round from facing uphill', results.unstick.uphillPivotDeg > 90,
+    `${results.unstick.uphillPivotDeg} deg in 4 s`],
+  ['skate shoves you off from a standstill', results.skate.kmhFromStandstill > 8 && results.skate.stayedGrounded,
+    `${results.skate.kmhFromStandstill} km/h`],
   ['every kicker launches', results.kickers.minAir > 0.4, `min air ${results.kickers.minAir}s over ${results.kickers.count} kickers`],
   ['run is completable', results.run.finished,
     results.run.finished ? `reached the finish in ${results.run.seconds} s` : (results.run.crashReason ?? 'never reached the finish')],

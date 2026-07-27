@@ -14,8 +14,9 @@ npm run dev      # http://localhost:5173
 | <kbd>A</kbd> / <kbd>D</kbd> | drag the left thumb | Carve onto the heel or toe edge |
 | <kbd>W</kbd> | hold TUCK | Tuck for speed |
 | <kbd>S</kbd> | hold BRAKE | Brake and slide |
-| <kbd>Space</kbd> | tap OLLIE | Ollie |
-| <kbd>R</kbd> | tap RIDE AGAIN | Restart |
+| <kbd>Space</kbd> | tap OLLIE | Ollie — or skate, when you're barely moving |
+| <kbd>E</kbd> | tap the prompt | Drop back onto the piste |
+| <kbd>R</kbd> | tap the prompt | Restart the run, at any time |
 
 Arrow keys work too. Your best time is kept in `localStorage`.
 
@@ -96,6 +97,28 @@ the faster the same edge angle swings you round. Holding the arc scrubs speed
 in proportion to how hard you're carving, so the quickest line down is the
 straightest one you can get away with. Off the corduroy, powder multiplies drag
 by an order of magnitude and takes most of your edge grip with it.
+
+### Getting unstuck
+
+Snow resists by being ploughed out of the way, so the resistance falls away as
+the board slows. Modelling it as a constant made deep snow an inescapable dead
+end — at 5.85 m/s² it outweighs gravity's pull on *every* gradient the course
+has, so a rider who stopped in powder could never start again, on any slope,
+however steep. There was a second trap behind it: carving needs speed, so at a
+crawl the edge does nothing and a rider stopped facing across the hill could
+not turn back down it.
+
+Three things now guarantee a way out, in increasing order of intervention:
+
+- The board can be shuffled round on the spot at low speed, fading out as soon
+  as there's enough speed to hold an edge. Gravity then does the rest.
+- Below 6 m/s the jump button skates instead of ollieing — a shove down the
+  fall line. You can't ollie usefully at walking pace anyway.
+- After a few seconds under 2.2 m/s, a prompt offers a drop back onto the
+  piste (the clock keeps running, so it costs the run rather than ending it)
+  or a restart. Restart is available at any time, mid-run included.
+
+### Airborne
 
 Vertically there is one rule, and jumps fall out of it rather than being
 special-cased. While the board is on the snow its vertical velocity is

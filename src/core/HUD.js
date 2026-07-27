@@ -36,6 +36,9 @@ export class HUD {
       start: $('btn-start'),
       retry: $('btn-retry'),
       again: $('btn-again'),
+      stuck: $('stuck-prompt'),
+      rescue: $('btn-rescue'),
+      restartRun: $('btn-restart-run'),
     };
 
     this._last = { speed: -1, timer: '', air: false, powder: false, progress: -1 };
@@ -62,10 +65,19 @@ export class HUD {
     }
   }
 
-  onAction({ onStart, onRestart }) {
+  onAction({ onStart, onRestart, onRescue }) {
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
     this.el.again.addEventListener('click', onRestart);
+    this.el.rescue?.addEventListener('click', onRescue);
+    this.el.restartRun?.addEventListener('click', onRestart);
+  }
+
+  /** The "bogged down" offer, shown once the rider has ground to a halt. */
+  setStuck(visible) {
+    if (this._stuckShown === visible) return;
+    this._stuckShown = visible;
+    this.el.stuck?.classList.toggle('on', visible);
   }
 
   hideLoading() {
@@ -146,6 +158,7 @@ export class HUD {
   }
 
   resetTicker() {
+    this._stuckShown = undefined;
     this._last = { speed: -1, timer: '', air: false, powder: false, progress: -1 };
   }
 }

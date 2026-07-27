@@ -13,6 +13,7 @@ const KEYMAP = {
   KeyS: 'brake', ArrowDown: 'brake',
   Space: 'jump',
   KeyR: 'restart',
+  KeyE: 'rescue',
 };
 
 export class Input {
@@ -20,6 +21,7 @@ export class Input {
     this.down = new Set();
     this.jumpPressed = false;
     this.restartPressed = false;
+    this.rescuePressed = false;
 
     /**
      * Written by the on-screen controls. Steering is analog here, unlike the
@@ -37,8 +39,8 @@ export class Input {
       if (e.repeat) return;
       if (action === 'jump') this.jumpPressed = true;
       if (action === 'restart') this.restartPressed = true;
+      if (action === 'rescue') this.rescuePressed = true;
       this.down.add(action);
-      this._anyKey = true;
     };
 
     this._onKeyUp = (e) => {
@@ -67,6 +69,7 @@ export class Input {
   endFrame() {
     this.jumpPressed = false;
     this.restartPressed = false;
+    this.rescuePressed = false;
   }
 
   clear() {
@@ -76,6 +79,7 @@ export class Input {
     this.touch.brake = false;
     this.jumpPressed = false;
     this.restartPressed = false;
+    this.rescuePressed = false;
   }
 
   dispose() {
