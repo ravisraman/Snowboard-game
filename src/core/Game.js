@@ -28,7 +28,10 @@ export class Game {
   constructor(renderer) {
     this.renderer = renderer;
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(HORIZON_COLOR.getHex(), 0.0019);
+    // Thick enough that the far snowfields reach the fog colour before the
+    // world runs out, so the mountains rise out of haze instead of standing
+    // behind a bright seam.
+    this.scene.fog = new THREE.FogExp2(HORIZON_COLOR.getHex(), 0.0026);
 
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.5, 9000);
     this.chase = new ChaseCamera(this.camera);

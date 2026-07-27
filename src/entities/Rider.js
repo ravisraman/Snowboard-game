@@ -390,10 +390,12 @@ export class Rider {
 const MAT = {
   jacket: new THREE.MeshStandardMaterial({ color: '#f4762a', roughness: 0.72, flatShading: true }),
   jacketDark: new THREE.MeshStandardMaterial({ color: '#d2551a', roughness: 0.75, flatShading: true }),
-  pants: new THREE.MeshStandardMaterial({ color: '#2c3440', roughness: 0.85, flatShading: true }),
+  pants: new THREE.MeshStandardMaterial({ color: '#31589c', roughness: 0.85, flatShading: true }),
+  pantsDark: new THREE.MeshStandardMaterial({ color: '#26457c', roughness: 0.85, flatShading: true }),
   boots: new THREE.MeshStandardMaterial({ color: '#1b2028', roughness: 0.7, flatShading: true }),
   skin: new THREE.MeshStandardMaterial({ color: '#e8b48c', roughness: 0.8, flatShading: true }),
-  helmet: new THREE.MeshStandardMaterial({ color: '#232a33', roughness: 0.45, flatShading: true }),
+  beanie: new THREE.MeshStandardMaterial({ color: '#f2b431', roughness: 0.9, flatShading: true }),
+  beanieBand: new THREE.MeshStandardMaterial({ color: '#e2762a', roughness: 0.9, flatShading: true }),
   goggles: new THREE.MeshStandardMaterial({ color: '#7fd4f0', roughness: 0.15, metalness: 0.4, emissive: '#20505f', emissiveIntensity: 0.35 }),
   deck: new THREE.MeshStandardMaterial({ color: '#242a33', roughness: 0.5, flatShading: true }),
   base: new THREE.MeshStandardMaterial({ color: '#e9f1f8', roughness: 0.25, metalness: 0.15, flatShading: true }),
@@ -498,7 +500,7 @@ function buildRiderModel() {
   // Hips, then a jacket that tapers from waist to shoulder. A single box for
   // the whole torso reads as a cardboard carton at chase-camera distance;
   // the taper and the collar are what make it read as a person.
-  part(new THREE.BoxGeometry(0.34, 0.2, 0.38), MAT.pants, 0, 0.05, 0, torso);
+  part(new THREE.BoxGeometry(0.34, 0.2, 0.38), MAT.pantsDark, 0, 0.05, 0, torso);
   part(new THREE.BoxGeometry(0.43, 0.1, 0.45), MAT.jacketDark, 0, 0.19, 0, torso); // hem
   part(new THREE.BoxGeometry(0.36, 0.26, 0.4), MAT.jacket, 0, 0.35, 0, torso);     // waist
   part(new THREE.BoxGeometry(0.46, 0.24, 0.46), MAT.jacket, 0, 0.57, 0, torso);    // chest
@@ -525,8 +527,12 @@ function buildRiderModel() {
   head.position.set(0, 0.78, 0.02);
   torso.add(head);
   part(new THREE.BoxGeometry(0.15, 0.13, 0.15), MAT.skin, 0, -0.07, 0, head);
-  part(new THREE.IcosahedronGeometry(0.18, 0), MAT.helmet, 0, 0.06, 0, head);
-  part(new THREE.BoxGeometry(0.23, 0.1, 0.07), MAT.goggles, 0, 0.03, 0.13, head);
+  // A knitted beanie with a turned-up brim and a bobble, not a helmet — it is
+  // the one spot of warm colour up there and it reads from a long way off.
+  part(new THREE.IcosahedronGeometry(0.175, 0), MAT.beanie, 0, 0.06, 0, head);
+  part(new THREE.CylinderGeometry(0.185, 0.185, 0.075, 8), MAT.beanieBand, 0, -0.03, 0, head);
+  part(new THREE.IcosahedronGeometry(0.055, 0), MAT.beanie, 0, 0.23, 0, head);
+  part(new THREE.BoxGeometry(0.23, 0.09, 0.07), MAT.goggles, 0, -0.02, 0.13, head);
 
   root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
 

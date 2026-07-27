@@ -26,6 +26,9 @@ or sound files. The trees, peaks, chalets, corduroy and snow spray are all
 built from primitives and shaders at startup, which keeps the whole thing to a
 single dependency and a couple of hundred kilobytes.
 
+A few of those generators are doing more than they look like they are, and the
+notes below cover the parts that are easy to get subtly wrong.
+
 ```
 src/
   main.js                 renderer, frame loop, window plumbing
@@ -92,6 +95,30 @@ fall line, the winding centre line of the piste, the kicker ramps and the
 powder. The terrain mesh, the tree scatter, the skiers and the rider's own
 collision all read the same analytic height field, so the visuals and the
 physics cannot drift apart.
+
+### Snow
+
+Groomed corduroy is white, not blue — the blue in a photograph of a piste is
+sky reflecting off it and shadow inside each groove. So the grooming is bumped
+into the surface *normal* rather than painted into the colour: a few thousand
+30 cm ridges catching the sun down one flank and shading down the other, faded
+out in the shader once a ridge gets finer than a pixel. Painting it as stripes
+instead gives you a blue rug.
+
+The pines follow the same principle in reverse. They are snow first and green
+second: each whorl of branches is covered by a scalloped white drape that is
+deliberately *blunter* than the cone beneath it, so it stands proud through the
+middle of the tier and piles over the apex while the green survives as a fringe
+at the bottom rim. A drape sharing the whorl's taper is uniformly scaled
+against it and either buries the tree or vanishes inside it.
+
+The mountain panorama is drawn unlit, with the sun, the conifer band and the
+aerial haze all baked into its vertex colours. The fill light the foreground
+snow needs is far too much for a peak four kilometres away, and no single
+lighting setup serves both. Shaded faces shift toward blue rather than just
+darkening, which is what stops the ranges reading as grey pyramids.
+
+### Terrain layout
 
 The slope mesh is laid out in *track space*: rows of vertices run perpendicular
 to the piste's tangent and columns are packed tightly across the groomer and

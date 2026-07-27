@@ -15,10 +15,17 @@ import { smoothstep } from '../core/mathx.js';
  * so the grooming lines follow every bend of the piste exactly.
  */
 
-const GROOMED_COLOR = new THREE.Color('#8fbfe6'); // the blue-tinted corduroy
-const GROOMED_DEEP = new THREE.Color('#6fa3d2'); // troughs between the ridges
-const POWDER_COLOR = new THREE.Color('#f6fbff'); // untracked snow, near-white
-const SHADE_COLOR = new THREE.Color('#c2dcf2');
+// Groomed snow is white, not blue. The blue in a photograph of a piste is the
+// sky reflecting off it and the shadow inside each groove — so the tint here is
+// barely there, and the grooming itself is carried by the shaded normal.
+const GROOMED_COLOR = new THREE.Color('#eef5fb'); // packed corduroy
+const GROOMED_DEEP = new THREE.Color('#d3e3f1');  // troughs between the ridges
+const POWDER_COLOR = new THREE.Color('#fbfdff');  // untracked snow
+const SHADE_COLOR = new THREE.Color('#dceaf6');   // far-field cooling
+
+/** Corduroy ridge spacing and depth, in metres. A groomer's tiller is fine. */
+const CORDUROY_PERIOD = 0.3;
+const CORDUROY_DEPTH = 0.011;
 
 /** How far the mesh reaches sideways, including the coarse far-field skirt. */
 const TERRAIN_REACH = 620;
@@ -224,11 +231,45 @@ export function makeSnowMaterial(extra = {}) {
          varying vec3 vWorld;
          uniform vec3 uGroomDeep;
 
-         // Hash for the powder sparkle.
+         const float CORD_PERIOD = ${CORDUROY_PERIOD.toFixed(3)};
+         const float CORD_K = ${((Math.PI * 2) / CORDUROY_PERIOD).toFixed(5)};
+
+         float onPisteAt(float u) {
+           return 1.0 - smoothstep(${(COURSE.trackHalfWidth - COURSE.edgeSoftness).toFixed(2)}, ${COURSE.trackHalfWidth.toFixed(2)}, abs(u));
+         }
+
+         // Fades the grooming out once a ridge is finer than a pixel, which is
+         // the only thing keeping the far piste from boiling.
+         float cordFade(float w) {
+           return 1.0 - smoothstep(0.16, 0.8, w / CORD_PERIOD);
+         }
+
          float hash21(vec2 p) {
            p = fract(p * vec2(233.34, 851.73));
            p += dot(p, p + 23.45);
            return fract(p.x * p.y);
+         }`
+      )
+      // The grooming is bumped into the *normal*, not painted into the colour.
+      // Corduroy is white-on-white in life: what you actually see is a few
+      // thousand tiny ridges catching the sun down one flank and shading down
+      // the other, and only a shaded normal reproduces that.
+      .replace(
+        '#include <normal_fragment_begin>',
+        `#include <normal_fragment_begin>
+         {
+           float onPiste = onPisteAt(vU);
+           float fade = cordFade(fwidth(vU)) * onPiste;
+           if (fade > 0.001) {
+             // World-space direction in which the across-track coordinate grows.
+             vec3 duWorld = dFdx(vWorld) * dFdx(vU) + dFdy(vWorld) * dFdy(vU);
+             float len = length(duWorld);
+             if (len > 1e-6) {
+               vec3 uDir = duWorld / len;
+               float slope = cos(vU * CORD_K) * CORD_K * ${CORDUROY_DEPTH.toFixed(4)};
+               normal = normalize(normal - uDir * slope * fade);
+             }
+           }
          }`
       )
       .replace(
@@ -236,18 +277,13 @@ export function makeSnowMaterial(extra = {}) {
         `#include <color_fragment>
          {
            float au = abs(vU);
-           float onPiste = 1.0 - smoothstep(${(COURSE.trackHalfWidth - COURSE.edgeSoftness).toFixed(2)}, ${COURSE.trackHalfWidth.toFixed(2)}, au);
+           float onPiste = onPisteAt(vU);
+           float fade = cordFade(fwidth(vU));
 
-           // --- Corduroy: ridges running down the fall line of the piste ---
-           float w = fwidth(vU);
-           float period = 1.15;
-           float ridge = sin(vU * ${(Math.PI * 2).toFixed(6)} / period);
-           // Fade the ridges out once they are finer than a pixel to stop shimmer.
-           ridge *= 1.0 - smoothstep(0.18, 0.85, w / period);
-           float groove = smoothstep(-0.25, 0.9, ridge);
-           vec3 corduroy = mix(uGroomDeep, diffuseColor.rgb, 0.55 + 0.45 * groove);
-           // A crisper dark seam at the bottom of every groove.
-           corduroy *= 1.0 - 0.07 * (1.0 - smoothstep(0.0, 0.35, ridge + 0.85));
+           // A whisper of tone on top of the shaded ridges — the groomer packs
+           // the troughs harder, so they sit a shade cooler than the crests.
+           float ridge = sin(vU * CORD_K) * fade;
+           vec3 corduroy = mix(uGroomDeep, diffuseColor.rgb, 0.72 + 0.28 * smoothstep(-1.0, 1.0, ridge));
            diffuseColor.rgb = mix(diffuseColor.rgb, corduroy, onPiste);
 
            // --- Powder sparkle: a few bright grains catching the sun ---
@@ -256,16 +292,16 @@ export function makeSnowMaterial(extra = {}) {
            float near = 1.0 - smoothstep(18.0, 65.0, length(vWorld - cameraPosition));
            float sparkle = hash21(floor(vWorld.xz * 7.0));
            sparkle = smoothstep(0.988, 1.0, sparkle) * (1.0 - onPiste) * near;
-           diffuseColor.rgb += sparkle * 0.22;
+           diffuseColor.rgb += sparkle * 0.2;
 
            // Groomer edge: a soft berm line where the corduroy meets the powder.
            float edge = smoothstep(0.35, 0.0, abs(au - ${COURSE.trackHalfWidth.toFixed(2)}));
-           diffuseColor.rgb *= 1.0 - 0.06 * edge;
+           diffuseColor.rgb *= 1.0 - 0.04 * edge;
          }`
       );
   };
 
   // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v1';
+  material.customProgramCacheKey = () => 'alpine-snow-v2';
   return material;
 }
