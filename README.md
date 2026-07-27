@@ -37,6 +37,12 @@ tells them apart at chase-camera distance, since the points would otherwise be
 the only difference. The phone gets two of the four, on the two buttons that
 were already dead in the air.
 
+Hopping is not a trick, however long you hang there. Air time is a bonus *on* a
+trick rather than a trick in itself — rotate, grab or shifty first, or it pays
+nothing and banks nothing. That is deliberate: air used to pay on its own and
+every clean landing banked the multiplier, which made the highest-scoring way
+down the mountain a series of straight bunny hops.
+
 **Butters** put rotation on the snow. <kbd>Shift</kbd> presses the board onto
 one end and the steering swings it round underneath you, judged on release
 exactly like a landing — a half turn rides away switch. Pressed, there is
@@ -81,6 +87,20 @@ IN click handler. iOS Safari will not start audio outside a real gesture, and a
 context created anywhere else stays suspended forever without an error to tell
 you so.
 
+## Hazards
+
+Trees end a run. Skiers do not: clattering into one costs you the speed, the
+line and the multiplier, and leaves you wobbling for a second, but a
+three-kilometre descent should not end because somebody wandered across the
+piste. The traffic also stays out of the middle — each skier works a lane off to
+one side, so there is always a corridor down the fall line — and the top of the
+mountain is empty so the drop-in is yours.
+
+One thing deliberately *not* part of a stumble: a kick to the edge spring. The
+first version knocked the rider onto a random edge, and a hard involuntary carve
+at eighty km/h puts you straight into the trees, which is the crash it was meant
+to replace.
+
 ## Looking like a mountain
 
 The scene renders through a small post chain: a multisampled target (this is
@@ -96,6 +116,22 @@ shader that writes its own fragments, so it is tone mapped only by the output
 pass; skipping the chain on phones made them render a visibly different sky from
 desktops. What the phone skips is the bloom and the grade. Multisampling is
 close to free on a tile-based GPU anyway.
+
+The panorama is four ranges, each a height field over an annulus wrapped right
+round the horizon and driven by ridged fractal noise. Ordinary fractal noise
+gives rolling hills — its extremes are smooth, so every summit comes out a dome
+— but folding it about its midpoint turns those crossings into creases, and
+stacking octaves of that gives crestlines with spurs and gullies. Snow lies
+where the ground is flat enough to hold it, gated by altitude, which is what
+turns a white pyramid into a mountain: the sheer faces come out as bare rock and
+the snowline is ragged for free, because the surface is ragged.
+
+Depth comes from the *difference* in haze between the ranges rather than from
+hazing all of them — wash everything toward the sky colour and the panorama goes
+flat. The nearest range is a band of foothills whose inner edge reaches back
+almost to the lip of the playable snowfields at zero height, laying a floor
+across the empty fog between where the terrain stops and where the mountains
+start.
 
 The resort furniture — marker poles down both edges of the piste, netting on the
 outside of the bends, a chairlift with chairs moving on it, rocks out in the far
@@ -316,8 +352,11 @@ the groomed line, the audio staying asleep until a real gesture, a pause that
 actually stops the clock, and the track ribbon wrapping its ring buffer without
 NaNs or vertices floating off the snow.
 
-42 assertions at the time of writing, and they are worth keeping green: three of
-them exist because the thing they check had already broken once.
+45 assertions at the time of writing, and they are worth keeping green: several
+exist because the thing they check had already broken once. The completion test
+runs with the traffic left in and the autopilot making no attempt to avoid
+anybody, which is the strongest statement of the thing that matters — that a
+rider who simply points down the hill gets to the village.
 
 ```bash
 npm run dev        # in one shell
