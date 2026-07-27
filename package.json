@@ -1,0 +1,20 @@
+{
+  "name": "alpine-carve",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A downhill snowboarding game built with Three.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "check": "node tools/check-mechanics.mjs"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.0",
+    "vite": "^8.1.5"
+  }
+}

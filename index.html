@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Alpine Carve — Downhill Snowboarding</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏂</text></svg>" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <!-- ===================== HUD ===================== -->
+    <div id="hud" class="hud" aria-hidden="true">
+      <div class="hud-speed">
+        <span id="speed-value">0</span><span class="hud-unit">km/h</span>
+        <div class="speed-bar"><div id="speed-fill"></div></div>
+      </div>
+      <div class="hud-timer">
+        <span id="timer-value">0:00.00</span>
+        <div class="hud-progress"><div id="progress-fill"></div></div>
+      </div>
+      <div id="air-meter" class="air-meter">
+        <span class="air-label">AIR</span><span id="air-value">0.0s</span>
+      </div>
+      <div id="powder-tag" class="powder-tag">DEEP POWDER</div>
+    </div>
+
+    <!-- ===================== Overlays ===================== -->
+    <div id="overlay" class="overlay">
+      <!-- Title -->
+      <section id="screen-title" class="screen">
+        <h1 class="title">ALPINE<span>CARVE</span></h1>
+        <p class="tagline">Ride the groomer to the village. Don't hit anything.</p>
+        <div class="controls">
+          <div class="ctrl"><kbd>A</kbd><kbd>D</kbd><span>Carve heel / toe edge</span></div>
+          <div class="ctrl"><kbd>W</kbd><span>Tuck for speed</span></div>
+          <div class="ctrl"><kbd>S</kbd><span>Brake &amp; slide</span></div>
+          <div class="ctrl"><kbd>Space</kbd><span>Ollie — pop off the kickers</span></div>
+        </div>
+        <button id="btn-start" class="cta">DROP IN</button>
+        <p class="hint">Stay on the blue corduroy — powder is fast to bog you down.</p>
+      </section>
+
+      <!-- Crash -->
+      <section id="screen-crash" class="screen hidden">
+        <h2 class="verdict">WIPEOUT</h2>
+        <p id="crash-reason" class="sub">You caught an edge.</p>
+        <dl class="stats">
+          <div><dt>Time</dt><dd id="crash-time">0:00.00</dd></div>
+          <div><dt>Distance</dt><dd id="crash-dist">0 m</dd></div>
+          <div><dt>Top speed</dt><dd id="crash-top">0 km/h</dd></div>
+        </dl>
+        <button id="btn-retry" class="cta">RIDE AGAIN</button>
+        <p class="hint">Press <kbd>R</kbd> to restart</p>
+      </section>
+
+      <!-- Finish -->
+      <section id="screen-finish" class="screen hidden">
+        <h2 class="verdict finish">RUN COMPLETE</h2>
+        <p class="sub">You made it to the village.</p>
+        <dl class="stats">
+          <div><dt>Time</dt><dd id="finish-time">0:00.00</dd></div>
+          <div><dt>Best</dt><dd id="finish-best">—</dd></div>
+          <div><dt>Top speed</dt><dd id="finish-top">0 km/h</dd></div>
+          <div><dt>Biggest air</dt><dd id="finish-air">0.0 s</dd></div>
+        </dl>
+        <button id="btn-again" class="cta">RIDE AGAIN</button>
+        <p class="hint">Press <kbd>R</kbd> to restart</p>
+      </section>
+    </div>
+
+    <div id="loading" class="loading"><div class="loading-inner">Shaping the mountain…</div></div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
