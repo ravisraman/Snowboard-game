@@ -9,10 +9,22 @@ import { COURSE } from '../world/Course.js';
  * They traverse in lazy S-turns across the groomer at a fraction of the
  * rider's speed, which makes them a moving hazard you have to read a line
  * around rather than a static obstacle you memorise.
+ *
+ * Two things keep them from making the run unridable. They stay out of the
+ * middle of the piste — each one is anchored to a lane off to one side, so
+ * there is always a corridor down the fall line rather than a wall of traffic
+ * sweeping the full width — and the top of the mountain is empty, so the first
+ * stretch is yours to get up to speed on.
  */
 
 const JACKETS = ['#e04b4b', '#3f7fd8', '#f0c33c', '#57b56a', '#b45fd0', '#e8863c'];
-const SKI_COUNT = 64;
+const SKI_COUNT = 30;
+
+/** No traffic above this, so the drop-in is clear. */
+const FIRST_SKIER_Z = 430;
+
+/** Half-width of the corridor down the middle that skiers stay out of. */
+const CORRIDOR = 4.5;
 
 function tint(geo, color) {
   geo.deleteAttribute('uv');
@@ -88,18 +100,25 @@ export class Skiers {
     this.skiers = [];
 
     for (let i = 0; i < SKI_COUNT; i++) {
-      const z = 180 + (i / SKI_COUNT) * (COURSE.finishZ - 320) + rng.spread(22);
+      const z = FIRST_SKIER_Z + (i / SKI_COUNT) * (COURSE.finishZ - FIRST_SKIER_Z - 260) + rng.spread(26);
       const gi = rng.int(0, JACKETS.length - 1);
       const mesh = new THREE.Mesh(this.geometries[gi], this.material);
       mesh.castShadow = true;
       this.group.add(mesh);
 
+      // Each skier works a lane off to one side. The arcs are still wide and
+      // lazy, but they are wide *within* a lane, so the two of them never close
+      // the middle of the piste at the same time.
+      const side = rng() < 0.5 ? -1 : 1;
+      const amp = rng.range(1.6, 3.4);
+      const lane = side * (CORRIDOR + amp + rng() * (COURSE.trackHalfWidth - CORRIDOR - amp - 1.5));
+
       this.skiers.push({
         mesh,
         z0: z,
         z,
-        // Traverse amplitude and rate: wide, slow arcs across the piste.
-        amp: rng.range(3.5, COURSE.trackHalfWidth - 2.5),
+        lane,
+        amp,
         freq: rng.range(0.016, 0.038),
         phase: rng() * Math.PI * 2,
         speed: rng.range(3.4, 7.2),
@@ -123,7 +142,7 @@ export class Skiers {
   _place(s, dt) {
     const c = this.course;
     s.z += s.speed * dt;
-    const u = Math.sin(s.z * s.freq + s.phase) * s.amp;
+    const u = s.lane + Math.sin(s.z * s.freq + s.phase) * s.amp;
     const tan = c.trackTangent(s.z);
     const x = c.centerX(s.z) + u * tan.z;
     const z = s.z - u * tan.x;

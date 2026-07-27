@@ -151,6 +151,7 @@ export class Game {
     this.tracks.reset();
     this.score.reset();
     this._grazed = new Set();
+    this._bumped = new Set();
     this.chase.reset(this.rider);
     this.elapsed = 0;
     this.crashTimer = 0;
@@ -480,9 +481,19 @@ export class Game {
       }
     }
 
-    // Skiers — jumpable, unlike the trees.
-    if (heightAboveGround < 1.9 && this.skiers.hits(x, z, RIDER_TUNING.riderRadius)) {
-      this._crash('You took out a skier.');
+    // Skiers — jumpable, unlike the trees, and survivable unlike the trees too.
+    // Clattering into one costs you the line, the speed and the streak, but it
+    // does not end a three-kilometre descent.
+    if (heightAboveGround < 1.9) {
+      const hit = this.skiers.hits(x, z, RIDER_TUNING.riderRadius);
+      if (hit && !this._bumped.has(hit) && this.rider.stumble()) {
+        this._bumped.add(hit);
+        this.score.onCrash();          // the streak does not survive it
+        this.audio.land(14, r.powder); // a solid thump
+        this.chase.kick(1.1);
+        this.spray.burst(r.position, 46, 4.5, r.powder);
+        this.hud.flashBump();
+      }
     }
   }
 

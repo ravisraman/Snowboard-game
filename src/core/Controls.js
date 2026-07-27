@@ -45,15 +45,16 @@ export const CONTROL_GROUPS = [
  * the point is to tell you what the game is looking for, not to be a spec.
  */
 export const TRICK_GUIDE = [
-  { name: 'Air', detail: 'Every second off the snow' },
+  { name: 'Air', detail: 'Every second off the snow — but only as part of a trick. A straight hop pays nothing' },
   { name: 'Spin', detail: 'Each 180 pays more than the last — a 720 beats two 360s' },
   { name: 'Grab', detail: 'By how long you hold it, and how awkward it is: method beats melon beats nose beats indy' },
   { name: 'Shifty', detail: 'Spin out and bring it back before you land' },
   { name: 'Pop', detail: 'Ollie in the last stretch of a ramp instead of coasting off it' },
-  { name: 'Butter', detail: 'A ground spin, for the empty stretches between kickers' },
+  { name: 'Butter', detail: 'A ground spin for the empty stretches — keeps the multiplier alive, but only air builds it' },
   { name: 'Clean landing', detail: 'Straight or switch, both count — and only this banks the multiplier' },
   { name: 'Stomped', detail: 'Dead straight on touchdown' },
   { name: 'Close one', detail: 'Threading a tree at speed' },
+  { name: 'Clipping a skier', detail: 'Costs you the speed and the multiplier — but not the run. Only trees end it' },
   { name: 'Powder turn', detail: 'A committed carve off the groomer' },
 ];
 

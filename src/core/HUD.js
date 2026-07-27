@@ -35,6 +35,7 @@ export class HUD {
       air: $('air-meter'),
       airValue: $('air-value'),
       powder: $('powder-tag'),
+      bump: $('bump-tag'),
       overlay: $('overlay'),
       title: $('screen-title'),
       crash: $('screen-crash'),
@@ -188,6 +189,15 @@ export class HUD {
 
   setMuted(muted) {
     this.el.mute?.classList.toggle('is-muted', muted);
+  }
+
+  /** Says what just happened, so a sudden loss of speed is not a mystery. */
+  flashBump() {
+    const el = this.el.bump;
+    if (!el) return;
+    el.classList.remove('on');
+    void el.offsetWidth;   // reflow, or the re-add is coalesced away
+    el.classList.add('on');
   }
 
   /** The "bogged down" offer, shown once the rider has ground to a halt. */
@@ -405,6 +415,7 @@ export class HUD {
   resetTicker() {
     this._stuckShown = undefined;
     this.el.trick?.classList.remove('pop');
+    this.el.bump?.classList.remove('on');
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
       score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1,

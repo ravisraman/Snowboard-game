@@ -400,18 +400,24 @@ const results = await page.evaluate(() => {
     };
   }
 
-  /* And the whole run has to be completable without touching anything. */
+  /**
+   * And the whole run has to be completable without touching anything — with
+   * the traffic left in.
+   *
+   * The autopilot rides the centre line and makes no attempt to avoid anybody,
+   * so this is the strongest statement of the thing that matters: that a rider
+   * who simply points down the hill gets to the village. It only holds because
+   * skiers stay out of the middle of the piste and because clipping one is a
+   * stumble rather than the end of the run.
+   */
   {
-    for (const s of g.skiers.skiers) s.mesh.visible = false;
-    const realHits = g.skiers.hits.bind(g.skiers);
-    g.skiers.hits = () => null;
-
-    const fake = { steer: 0, tuck: false, brake: false, jumpPressed: false, restartPressed: false, endFrame() {}, clear() {} };
+    const fake = { steer: 0, tuck: false, brake: false, press: false, grabType: null,
+      jumpPressed: false, restartPressed: false, endFrame() {}, clear() {} };
     const realInput = g.input;
     g.input = fake;
     g.start();
 
-    let airs = 0, wasAir = false, top = 0;
+    let airs = 0, wasAir = false, top = 0, bumps = 0, wasStumbling = false, air = 0;
     // The tracker marker has to march down the rail and never jump back.
     const marker = document.getElementById('tracker-rider');
     let lastTop = -1, trackerBacktracked = false, trackerSamples = 0;
@@ -422,15 +428,30 @@ const results = await page.evaluate(() => {
       let d = Math.atan2(c.centerX(lookZ) - rr.position.x, lookZ - rr.position.z) - rr.yaw;
       while (d > Math.PI) d -= 2 * Math.PI;
       while (d < -Math.PI) d += 2 * Math.PI;
-      // Steering only on the snow: this run is checking that the course goes,
-      // not that the autopilot can spin.
-      fake.steer = rr.grounded ? (d > 0.025 ? 1 : d < -0.025 ? -1 : 0) : 0;
-      fake.tuck = fake.steer === 0;
+      // On the snow, follow the line. In the air, centre the stick for a beat
+      // to arm the spin and then throw a grabbed rotation — so this run also
+      // proves that a rider who actually tricks their way down still gets to
+      // the bottom, and that the run scores something.
+      //
+      // Proportional, not bang-bang. Full lock either side of a deadband keeps
+      // the rider oscillating across the piste, and sooner or later it meets a
+      // kicker mid-correction, takes off pointing across the hill and flies
+      // into the trees — which says nothing about whether the course is
+      // ridable, only that the autopilot was sawing at the stick.
+      air = rr.grounded ? 0 : air + 1;
+      fake.steer = rr.grounded
+        ? Math.max(-1, Math.min(1, d * 2.4))
+        : (air > 12 && air < 78 ? 1 : 0);
+      fake.grabType = !rr.grounded && air > 12 && air < 62 ? 'method' : null;
+      fake.tuck = rr.grounded && fake.steer === 0;
       g.update(1 / 120);
       if (g.state === 'riding') {
         top = Math.max(top, rr.speed);
         if (!rr.grounded && !wasAir) airs++;
         wasAir = !rr.grounded;
+        const stumbling = rr.stumbleTime > 0;
+        if (stumbling && !wasStumbling) bumps++;
+        wasStumbling = stumbling;
         if (i % 240 === 0) {
           const t = parseFloat(marker?.style.top ?? '0') || 0;
           if (t < lastTop - 0.01) trackerBacktracked = true;
@@ -448,6 +469,11 @@ const results = await page.evaluate(() => {
       crashReason: g.rider.crashReason ?? null,
       score: Math.round(g.score.total),
       tricksLogged: g.score.log.length,
+      bumps,
+      // Where it ended, and how far off the groomed line — which is the
+      // difference between "the course is unfair" and "the autopilot wandered".
+      endZ: Math.round(g.rider.position.z),
+      endOffset: +c.trackOffset(g.rider.position.x, g.rider.position.z).toFixed(1),
     };
 
     out.tracker = {
@@ -463,8 +489,31 @@ const results = await page.evaluate(() => {
     const bankedBeforeCrash = g.score.total;
     g.score.onCrash();
     out.combo = { afterCrash: g.score.combo, keptPoints: g.score.total === bankedBeforeCrash };
-    g.skiers.hits = realHits;
     g.input = realInput;
+  }
+
+  /**
+   * Hopping must not be a scoring strategy. A straight air pays nothing and
+   * banks nothing, however long it hangs; the same air with a grab on it pays.
+   */
+  {
+    const hop = { clean: true, stomped: false, spinDegrees: 4, shifty: false,
+      grabTime: 0, grabType: null, popped: false, switchStance: false, airTime: 1.6 };
+    const withGrab = { ...hop, grabTime: 0.9, grabType: 'indy' };
+
+    g.score.reset();
+    const hopAward = g.score.onTrickLanded(hop);
+    const hopCombo = g.score.combo;
+    g.score.reset();
+    const grabAward = g.score.onTrickLanded(withGrab);
+
+    out.hop = {
+      hopPaid: hopAward ? hopAward.points : 0,
+      hopCombo,
+      grabPaid: grabAward ? grabAward.points : 0,
+      grabCombo: g.score.combo,
+    };
+    g.score.reset();
   }
 
   return out;
@@ -634,7 +683,14 @@ const checks = [
     results.combo.afterCrash === 1 && results.combo.keptPoints,
     `combo -> ${results.combo.afterCrash}`],
   ['every kicker launches', results.kickers.minAir > 0.4, `min air ${results.kickers.minAir}s over ${results.kickers.count} kickers`],
-  ['run is completable', results.run.finished,
+  ['a straight hop pays nothing and banks nothing',
+    results.hop.hopPaid === 0 && results.hop.hopCombo === 1,
+    `hop ${results.hop.hopPaid} pts (combo ${results.hop.hopCombo}), same air grabbed ${results.hop.grabPaid} pts (combo ${results.hop.grabCombo})`],
+  ['a grabbed air still pays', results.hop.grabPaid > 60 && results.hop.grabCombo === 2,
+    `${results.hop.grabPaid} pts`],
+  ['clipping a skier does not end the run', results.run.finished || results.run.bumps === 0,
+    `${results.run.bumps} skiers clipped on the way down`],
+  ['run is completable, traffic and all', results.run.finished,
     results.run.finished ? `reached the finish in ${results.run.seconds} s` : (results.run.crashReason ?? 'never reached the finish')],
   ['run takes 60-180 s', results.run.seconds > 60 && results.run.seconds < 180, `${results.run.seconds} s`],
   ['audio stays asleep until a user gesture', audio.supported && !audio.beforeGesture,

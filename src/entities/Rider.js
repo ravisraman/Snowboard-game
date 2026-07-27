@@ -63,6 +63,9 @@ const TUNING = {
   landSpeedKeep: 0.87,
 
   riderRadius: 0.62,
+
+  stumbleSeconds: 1.1,    // how long a clipped skier stays with you
+  stumbleScrub: 0.45,     // fraction of speed kept through the hit
 };
 
 export const RIDER_TUNING = TUNING;
@@ -135,6 +138,7 @@ export class Rider {
     this.trickLanded = null;
     this.trickFailed = false;
     this.spinArmed = false;
+    this.stumbleTime = 0;
 
     // Butters: riding on one end of the board with the other in the air.
     this.pressing = false;
@@ -429,6 +433,7 @@ export class Rider {
 
     if (this.grounded) this.airTime = 0;
     this.landedHard = damp(this.landedHard, 0, 6, dt);
+    if (this.stumbleTime > 0) this.stumbleTime = Math.max(0, this.stumbleTime - dt);
 
     this._animate(dt, slope, n);
   }
@@ -549,6 +554,27 @@ export class Rider {
       this.position.z + rz * side * off - Math.cos(this.boardYaw) * 0.35
     );
     return out;
+  }
+
+  /**
+   * A clip rather than a crash.
+   *
+   * Clattering into somebody at speed should cost you the line, the speed and
+   * the streak — but not the whole descent. A run that ends because a skier
+   * wandered across the piste is a run you never really got to ride, and the
+   * mountain is three kilometres long.
+   */
+  stumble() {
+    if (this.crashed || this.stumbleTime > 0) return false;
+    this.stumbleTime = TUNING.stumbleSeconds;
+    this.speed *= TUNING.stumbleScrub;
+    // Knocked off whatever edge you were on. Deliberately *not* a kick to the
+    // edge spring as well: a hard involuntary carve at eighty km/h puts you in
+    // the trees, which is the crash this was meant to replace.
+    this.lean = 0;
+    this.leanVel = 0;
+    this.pressing = false;
+    return true;
   }
 
   crash(reason = 'You caught an edge.') {
@@ -690,6 +716,18 @@ export class Rider {
     // The board runs slightly across its own path in a carve.
     m.board.rotation.y = -leanRatio * 0.14;
     m.head.rotation.y = leanRatio * 0.42 * facing + 0.15 * facing;
+
+    // Clipped somebody: arms up, and a wobble that decays over the second or so
+    // it takes to gather yourself back up. Without it the speed simply vanishes
+    // and the hit reads as the game glitching rather than as contact.
+    if (this.stumbleTime > 0) {
+      const w = this.stumbleTime / TUNING.stumbleSeconds;
+      const t = (TUNING.stumbleSeconds - this.stumbleTime) * 19;
+      m.tilt.rotation.z += Math.sin(t) * 0.34 * w;
+      m.tilt.rotation.x += Math.sin(t * 0.7 + 1.2) * 0.16 * w;
+      m.armFront.rotation.z -= 0.9 * w;
+      m.armBack.rotation.z += 0.9 * w;
+    }
   }
 }
 

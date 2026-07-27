@@ -303,6 +303,34 @@ kbd {
 
 .powder-tag.on { opacity: 0.95; }
 
+/* Sits where the powder tag does, but announces itself and leaves — the point
+   is to explain a sudden loss of speed, not to sit there. */
+.bump-tag {
+  position: absolute;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 138, 61, 0.55);
+  background: rgba(58, 22, 6, 0.42);
+  backdrop-filter: blur(4px);
+  color: #ffbc8d;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  opacity: 0;
+}
+
+.bump-tag.on { animation: bumpflash 1.5s ease-out both; }
+
+@keyframes bumpflash {
+  0% { opacity: 0; transform: translate(-50%, 8px) scale(0.92); }
+  12% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* ======================= Run tracker ========================= */
 
 /* A slim rail down one edge: where you are on the mountain, and — the part a

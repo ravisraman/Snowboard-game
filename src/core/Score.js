@@ -16,17 +16,17 @@ import { clamp } from './mathx.js';
  */
 
 const TUNING = {
-  airPerSecond: 14,
+  airPerSecond: 9,       // and only ever as part of a trick — see onTrickLanded
   halfTurnBase: 50,      // rotation pays base * n(n+1)/2 for n half-turns
   grabMinimum: 0.22,     // shorter than this is a fumble, not a grab
-  cleanBonus: 45,
+  cleanBonus: 35,
   stompBonus: 40,        // dead straight, both feet under you
   shifty: 45,
   pop: 35,               // ollied right at the lip
   sketchyScale: 0.4,     // a scrappy landing still pays, but not much
   nearMiss: 30,
   powderPerSecond: 22,   // hard carving off-piste, while it lasts
-  butterBase: 60,        // ground rotation, same escalating curve as the air
+  butterBase: 45,        // ground rotation, same escalating curve as the air
   comboDecay: 4.5,       // seconds of nothing before the multiplier slides back
   comboMax: 8,
 };
@@ -95,6 +95,16 @@ export class Score {
     const grabbed = trick.grabTime >= TUNING.grabMinimum;
     const grab = grabbed ? (GRABS[trick.grabType] ?? GRABS.indy) : null;
 
+    // Hopping is not a trick, however long you hang there.
+    //
+    // Air time used to pay on its own, and every clean landing banked the
+    // multiplier — so the highest-scoring way to ride the mountain was to bunny
+    // hop down it, never turning, letting the multiplier climb to its cap. Air
+    // is now a *bonus on* a trick rather than a trick in itself: you have to
+    // rotate, grab or shifty before any of it counts, and the combo only banks
+    // when it does.
+    if (halfTurns === 0 && !grabbed && !trick.shifty) return null;
+
     let points = TUNING.airPerSecond * trick.airTime;
     if (halfTurns > 0) points += TUNING.halfTurnBase * ((halfTurns * (halfTurns + 1)) / 2);
     if (grab) points += grab.rate * trick.grabTime;
@@ -102,9 +112,6 @@ export class Score {
     if (trick.popped) points += TUNING.pop;
     if (trick.clean) points += TUNING.cleanBonus;
     if (trick.stomped) points += TUNING.stompBonus;
-
-    // A straight hop off a roller is not a trick; don't spam the HUD with it.
-    if (halfTurns === 0 && !grabbed && !trick.shifty && trick.airTime < 0.55) return null;
 
     if (!trick.clean) points *= TUNING.sketchyScale;
 
@@ -139,8 +146,10 @@ export class Score {
     const label = `${trick.nose ? 'NOSE' : 'TAIL'} BUTTER ${n * 180}`;
     const award = this._add(points, label);
 
+    // A butter *sustains* the streak but does not build it. It is the safe move
+    // — no air, no landing to get wrong — and if it banked the multiplier like
+    // an air does, spinning on the flat would be the whole game.
     if (trick.clean) {
-      this.combo = Math.min(TUNING.comboMax, this.combo + 1);
       this.comboTimer = TUNING.comboDecay;
       this.tricksLanded++;
     }

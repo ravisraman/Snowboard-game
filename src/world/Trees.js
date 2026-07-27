@@ -200,8 +200,11 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
       // Most trees live in the forest band; a few crowd the edge of the piste.
       let u;
       const roll = rng();
-      if (roll < 0.045) {
-        u = side * (COURSE.trackHalfWidth + treeR + 0.5 + rng() * 2.8); // encroaching
+      if (roll < 0.02) {
+        // Encroaching, but with a couple of metres of forgiveness outside the
+        // corduroy. Drifting a board's width off the groomed line while you sort
+        // out a landing should cost you speed in the powder, not the run.
+        u = side * (COURSE.trackHalfWidth + treeR + 2.6 + rng() * 2.4);
       } else if (roll < 0.6) {
         u = side * (COURSE.trackHalfWidth + 4 + rng() * 26);
       } else if (roll < 0.86) {
