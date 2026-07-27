@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { clamp, damp, smoothstep, angleDelta } from '../core/mathx.js';
+import { clamp, damp, lerp, smoothstep, angleDelta } from '../core/mathx.js';
+import { buildRiderModel, solveTwoBone, RIG } from './RiderModel.js';
 
 /**
  * The snowboarder: model, and the carving physics that give the game its feel.
@@ -71,18 +72,22 @@ const TUNING = {
 export const RIDER_TUNING = TUNING;
 
 /**
- * The four grabs, as poses.
+ * The four grabs, as places on the board to put a hand.
  *
- * `front`/`back` are the two arm angles, `fold` is how far the torso folds over
- * the board, and `tweak` is the sideways bone — a method is mostly tweak, an
- * indy is mostly fold. They differ enough to be told apart from behind, which
- * is the only view the player ever has of them.
+ * Now that the arms are solved rather than posed, a grab is specified the way a
+ * rider would describe it — which hand, and where on the board it goes — and
+ * the elbow works itself out. `x` is across the board (positive toward the toe
+ * edge) and `z` along it (positive toward the nose), both in metres.
+ *
+ * `fold` is how far the torso folds over the board and `tweak` is the sideways
+ * bone: a method is mostly tweak, an indy is mostly fold. That is what tells
+ * them apart from behind, which is the only view the player ever gets.
  */
 const GRAB_POSES = {
-  indy:   { front: -1.85, back: 1.15, fold: 0.34, tweak: 0 },
-  melon:  { front: -1.2, back: 1.95, fold: 0.28, tweak: -0.3 },
-  nose:   { front: -2.25, back: 0.7, fold: 0.46, tweak: 0.12 },
-  method: { front: -1.05, back: 2.3, fold: 0.16, tweak: -0.62 },
+  indy:   { arm: 'back',  x: 0.17,  z: 0.02,  fold: 0.48, tweak: 0 },
+  melon:  { arm: 'front', x: -0.17, z: 0.1,   fold: 0.44, tweak: -0.3 },
+  nose:   { arm: 'front', x: 0.0,   z: 0.6,   fold: 0.6,  tweak: 0.12 },
+  method: { arm: 'front', x: -0.19, z: -0.02, fold: 0.32, tweak: -0.62 },
 };
 
 export class Rider {
@@ -159,7 +164,7 @@ export class Rider {
     this.model.root.rotation.set(0, this.yaw, 0);
     this.model.tilt.rotation.set(0, 0, 0);
     this.model.body.rotation.set(0, 0, 0);
-    this.model.body.position.set(0, 0, 0);
+    this.model.body.position.set(0, RIG.boardTop + RIG.hipHeight, 0);
     this.model.root.visible = true;
     this.settle();
   }
@@ -660,10 +665,13 @@ export class Rider {
     if (!this.grounded) {
       // Extend off the lip, then tuck up as the rotation builds.
       const spinTuck = clamp(this.spinDegrees / 360, 0, 1) * 0.16;
-      crouch += -0.14 + spinTuck + (this.grabbing ? 0.26 : 0);
+      // Grabbing, the board comes up to meet the hand as much as the hand goes
+      // down to meet the board — that is most of how a grab is actually done,
+      // and the arm alone cannot span the gap.
+      crouch += -0.14 + spinTuck + (this.grabbing ? 0.36 : 0);
     }
     this._crouch = damp(this._crouch, crouch, this.grounded ? 12 : 8, dt);
-    m.body.position.y = -this._crouch;
+    m.body.position.y = RIG.boardTop + RIG.hipHeight - this._crouch;
     m.body.rotation.x = this._crouch * 0.55 + (this.tucking ? 0.28 : 0);
 
     // Weight moves fore and aft with acceleration — driven back under power,
@@ -690,32 +698,13 @@ export class Rider {
       m.body.rotation.y -= wind * 0.5;
     }
 
-    // Lead arm drops toward the snow through the turn; trailing arm counters.
-    const reach = leanRatio * facing;
-    m.armFront.rotation.z = -0.55 - reach * 0.95;
-    m.armBack.rotation.z = 0.5 - reach * 0.85;
-
-    if (!this.grounded) {
-      if (this.grabbing) {
-        // Reaching down to the board. Which hand goes where, and how far the
-        // body folds over it, is what tells the four grabs apart at chase-camera
-        // distance — the points would otherwise be the only difference.
-        const grab = clamp(this.grabTime * 6, 0, 1);
-        const pose = GRAB_POSES[this.grabType] ?? GRAB_POSES.indy;
-        m.armFront.rotation.z = damp(m.armFront.rotation.z, pose.front, 18, dt);
-        m.armBack.rotation.z = damp(m.armBack.rotation.z, pose.back, 14, dt);
-        m.body.rotation.x += grab * pose.fold;
-        m.body.rotation.z += grab * pose.tweak;
-      } else {
-        const t = this.airTime * 5;
-        m.armFront.rotation.z += Math.sin(t) * 0.22 - 0.35;
-        m.armBack.rotation.z += Math.cos(t) * 0.2 + 0.3;
-      }
-    }
+    this._poseLegs(dt);
+    this._poseArms(dt, leanRatio, facing);
 
     // The board runs slightly across its own path in a carve.
     m.board.rotation.y = -leanRatio * 0.14;
     m.head.rotation.y = leanRatio * 0.42 * facing + 0.15 * facing;
+    m.neck.rotation.z = -leanRatio * 0.12;
 
     // Clipped somebody: arms up, and a wobble that decays over the second or so
     // it takes to gather yourself back up. Without it the speed simply vanishes
@@ -725,164 +714,114 @@ export class Rider {
       const t = (TUNING.stumbleSeconds - this.stumbleTime) * 19;
       m.tilt.rotation.z += Math.sin(t) * 0.34 * w;
       m.tilt.rotation.x += Math.sin(t * 0.7 + 1.2) * 0.16 * w;
-      m.armFront.rotation.z -= 0.9 * w;
-      m.armBack.rotation.z += 0.9 * w;
+      m.torso.rotation.x += Math.sin(t * 1.3) * 0.12 * w;
     }
   }
-}
 
-/* ==================================================================
- * Model
- * ================================================================ */
+  /**
+   * The boots are bolted to the board, so every bit of crouch has to come out
+   * of the knees. Solving the legs to the bindings — rather than posing them
+   * and hoping — is what stops the feet sinking through the deck when the rider
+   * compresses, and it means the absorb on a landing is *visible* in the joints
+   * rather than being the whole body sliding down a pole.
+   */
+  _poseLegs(dt) {
+    const m = this.model;
 
-const MAT = {
-  jacket: new THREE.MeshStandardMaterial({ color: '#f4762a', roughness: 0.72, flatShading: true }),
-  jacketDark: new THREE.MeshStandardMaterial({ color: '#d2551a', roughness: 0.75, flatShading: true }),
-  pants: new THREE.MeshStandardMaterial({ color: '#31589c', roughness: 0.85, flatShading: true }),
-  pantsDark: new THREE.MeshStandardMaterial({ color: '#26457c', roughness: 0.85, flatShading: true }),
-  boots: new THREE.MeshStandardMaterial({ color: '#1b2028', roughness: 0.7, flatShading: true }),
-  skin: new THREE.MeshStandardMaterial({ color: '#e8b48c', roughness: 0.8, flatShading: true }),
-  beanie: new THREE.MeshStandardMaterial({ color: '#f2b431', roughness: 0.9, flatShading: true }),
-  beanieBand: new THREE.MeshStandardMaterial({ color: '#e2762a', roughness: 0.9, flatShading: true }),
-  goggles: new THREE.MeshStandardMaterial({ color: '#7fd4f0', roughness: 0.15, metalness: 0.4, emissive: '#20505f', emissiveIntensity: 0.35 }),
-  deck: new THREE.MeshStandardMaterial({ color: '#242a33', roughness: 0.5, flatShading: true }),
-  base: new THREE.MeshStandardMaterial({ color: '#e9f1f8', roughness: 0.25, metalness: 0.15, flatShading: true }),
-};
+    // The bindings, expressed relative to each hip. The body has already been
+    // moved for this frame, so subtracting its offset gives the reach the legs
+    // have to make up.
+    const ankleY = RIG.boardTop + 0.14 - m.body.position.y;
+    const legs = [
+      [m.legFront, RIG.frontBindingZ],
+      [m.legBack, RIG.backBindingZ],
+    ];
 
-function part(geo, mat, x, y, z, parent) {
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y, z);
-  mesh.castShadow = true;
-  parent.add(mesh);
-  return mesh;
-}
+    for (const [leg, bindingZ] of legs) {
+      const targetY = ankleY - leg.root.position.y;
+      const targetZ = bindingZ - m.body.position.z - leg.root.position.z;
+      solveTwoBone(leg, targetY, targetZ, RIG.thigh, RIG.shin, 1);
 
-/**
- * The snowboard: a lofted deck with sidecut at the waist and kicked tips,
- * built from a strip of quads so it keeps the faceted look of the scenery.
- */
-function buildBoardGeometry() {
-  const N = 16;
-  const length = 1.62;
-  const thickness = 0.035;
-  const top = [];
-  const bottom = [];
-
-  for (let i = 0; i <= N; i++) {
-    const s = (i / N) * 2 - 1;
-    const z = (s * length) / 2;
-    // Rounded nose and tail, waist narrower than the tips.
-    const round = Math.sqrt(Math.max(0, 1 - Math.pow(Math.abs(s), 8)));
-    const w = 0.166 * round * (1 - 0.17 * (1 - s * s));
-    const kick = 0.085 * Math.pow(Math.abs(s), 6);
-    top.push([-w, kick + thickness, z], [w, kick + thickness, z]);
-    bottom.push([-w, kick, z], [w, kick, z]);
+      // Keep the boot flat on the board whatever the knee is doing. Without
+      // this the foot points wherever the shin happens to end up, which looks
+      // like a broken ankle.
+      leg.boot.rotation.x = -(leg.root.rotation.x + leg.joint.rotation.x);
+    }
   }
 
-  const pos = [];
-  const push = (a, b, c) => pos.push(...a, ...b, ...c);
-  const quad = (a, b, c, d) => { push(a, b, c); push(a, c, d); };
+  /**
+   * Arms, also solved. A grab is now specified as a point on the board and the
+   * elbow works itself out, so the hand actually arrives at the edge it is
+   * supposed to be holding instead of approximately gesturing at it.
+   */
+  _poseArms(dt, leanRatio, facing) {
+    const m = this.model;
+    const reach = leanRatio * facing;
 
-  for (let i = 0; i < N; i++) {
-    const t0 = top[i * 2], t1 = top[i * 2 + 1];
-    const t2 = top[i * 2 + 2], t3 = top[i * 2 + 3];
-    const b0 = bottom[i * 2], b1 = bottom[i * 2 + 1];
-    const b2 = bottom[i * 2 + 2], b3 = bottom[i * 2 + 3];
-    quad(t0, t2, t3, t1);   // deck
-    quad(b0, b1, b3, b2);   // base
-    quad(t0, t1, b1, b0);   // (degenerate at the tips, harmless)
-    quad(t0, b0, b2, t2);   // left edge
-    quad(t1, t3, b3, b1);   // right edge
+    /**
+     * Points the whole arm at a target and then bends the elbow to reach it.
+     *
+     * The shoulder swings about Y first so the arm faces the target, and the
+     * two-bone solve then works in the plane that swing produced. Without the
+     * swing every grab looks the same — the elbow can only bend in one plane,
+     * so a nose grab and an indy come out as the same downward reach.
+     */
+    const aim = (arm, tx, ty, tz) => {
+      arm.root.rotation.order = 'YXZ';
+      arm.root.rotation.y = Math.atan2(tx, tz);
+      solveTwoBone(arm, ty, Math.hypot(tx, tz), RIG.upperArm, RIG.forearm, -1);
+    };
+
+    /** A point on the board, as a target relative to one shoulder. */
+    const boardTarget = (arm, bx, bz) => {
+      // Board space -> body space -> torso space. The torso is turned a quarter
+      // turn about Y, which swaps the horizontal axes: along-board becomes
+      // torso X, across-board becomes torso Z.
+      const t = {
+        x: -bz - arm.root.position.x,
+        y: RIG.boardTop - m.body.position.y - m.torso.position.y - arm.root.position.y,
+        z: bx - arm.root.position.z,
+      };
+      return t;
+    };
+
+    // Neutral riding: hands out for balance, the lead one dropping toward the
+    // inside of the arc, with a slow sway in the air.
+    const sway = this.grounded ? 0 : Math.sin(this.airTime * 5) * 0.09;
+    const front = { x: -0.12, y: -0.34 - Math.abs(reach) * 0.06, z: 0.2 + reach * 0.22 + sway };
+    const back = { x: 0.12, y: -0.34, z: -0.22 + reach * 0.16 - sway };
+
+    if (!this.grounded && this.grabbing) {
+      const pose = GRAB_POSES[this.grabType] ?? GRAB_POSES.indy;
+      const grab = clamp(this.grabTime * 6, 0, 1);
+      const grabbing = pose.arm === 'front' ? front : back;
+      const other = pose.arm === 'front' ? back : front;
+      const arm = pose.arm === 'front' ? m.armFront : m.armBack;
+      const t = boardTarget(arm, pose.x, pose.z);
+
+      // Blend in over the first sixth of a second, so the hand travels to the
+      // board rather than appearing on it.
+      grabbing.x = lerp(grabbing.x, t.x, grab);
+      grabbing.y = lerp(grabbing.y, t.y, grab);
+      grabbing.z = lerp(grabbing.z, t.z, grab);
+      // The free arm goes up and out, which is both what a rider does for
+      // balance and what stops the two arms overlapping into a single blob.
+      other.y += 0.28 * grab;
+      other.z -= 0.14 * grab;
+
+      m.body.rotation.x += grab * pose.fold;
+      m.body.rotation.z += grab * pose.tweak;
+    }
+
+    aim(m.armFront, front.x, front.y, front.z);
+    aim(m.armBack, back.x, back.y, back.z);
+
+    // Clipped somebody: hands fly up. Applied on top of the solve, because it
+    // is the one moment the rider is not in control of where their arms are.
+    if (this.stumbleTime > 0) {
+      const w = this.stumbleTime / TUNING.stumbleSeconds;
+      m.armFront.root.rotation.x -= 1.1 * w;
+      m.armBack.root.rotation.x -= 1.0 * w;
+    }
   }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.computeVertexNormals();
-  geo.translate(0, -thickness * 0.5, 0);
-  return geo;
-}
-
-function buildRiderModel() {
-  const root = new THREE.Group();
-  root.name = 'rider';
-
-  const tilt = new THREE.Group();   // edge angle + slope alignment
-  root.add(tilt);
-
-  const board = new THREE.Group();
-  tilt.add(board);
-  part(buildBoardGeometry(), MAT.deck, 0, 0.035, 0, board);
-  // A bright base peeking out reads as the edge catching light mid-carve.
-  const base = part(buildBoardGeometry(), MAT.base, 0, 0.028, 0, board);
-  base.scale.set(0.96, 0.5, 0.99);
-
-  // A top-sheet stripe down the deck: the board is seen almost edge-on from
-  // the chase camera, and this is what keeps it from vanishing under the boots.
-  part(new THREE.BoxGeometry(0.075, 0.012, 1.28), MAT.jacket, 0, 0.055, 0, board);
-
-  // Bindings
-  for (const bz of [0.34, -0.3]) {
-    part(new THREE.BoxGeometry(0.26, 0.05, 0.3), MAT.boots, 0, 0.075, bz, board);
-  }
-
-  const body = new THREE.Group();   // everything above the board
-  body.position.y = 0.09;
-  tilt.add(body);
-
-  // Legs — bent, with the rider's weight over the board.
-  for (const [lz, bend] of [[0.33, 0.24], [-0.29, -0.2]]) {
-    const leg = new THREE.Group();
-    leg.position.set(0, 0, lz);
-    leg.rotation.x = bend;
-    body.add(leg);
-    part(new THREE.BoxGeometry(0.19, 0.46, 0.22), MAT.pants, 0, 0.25, 0, leg);
-    part(new THREE.BoxGeometry(0.22, 0.14, 0.28), MAT.boots, 0, 0.05, 0.01, leg);
-  }
-
-  // Hips and torso, turned across the board the way a rider stands.
-  const torso = new THREE.Group();
-  torso.position.y = 0.5;
-  torso.rotation.y = Math.PI * 0.5; // face across the board
-  body.add(torso);
-
-  // Hips, then a jacket that tapers from waist to shoulder. A single box for
-  // the whole torso reads as a cardboard carton at chase-camera distance;
-  // the taper and the collar are what make it read as a person.
-  part(new THREE.BoxGeometry(0.34, 0.2, 0.38), MAT.pantsDark, 0, 0.05, 0, torso);
-  part(new THREE.BoxGeometry(0.43, 0.1, 0.45), MAT.jacketDark, 0, 0.19, 0, torso); // hem
-  part(new THREE.BoxGeometry(0.36, 0.26, 0.4), MAT.jacket, 0, 0.35, 0, torso);     // waist
-  part(new THREE.BoxGeometry(0.46, 0.24, 0.46), MAT.jacket, 0, 0.57, 0, torso);    // chest
-  part(new THREE.BoxGeometry(0.32, 0.1, 0.34), MAT.jacketDark, 0, 0.7, 0, torso);  // collar
-
-  // Arms hang from the shoulders and swing for balance. They sit fore and aft
-  // along the board, which is where a rider actually holds them.
-  const armFront = new THREE.Group();
-  armFront.position.set(0.25, 0.66, 0.03);
-  torso.add(armFront);
-  part(new THREE.BoxGeometry(0.15, 0.28, 0.16), MAT.jacket, 0.05, -0.13, 0, armFront);
-  part(new THREE.BoxGeometry(0.13, 0.24, 0.14), MAT.jacketDark, 0.12, -0.37, 0, armFront);
-  part(new THREE.BoxGeometry(0.12, 0.12, 0.13), MAT.boots, 0.15, -0.53, 0, armFront);
-
-  const armBack = new THREE.Group();
-  armBack.position.set(-0.25, 0.66, 0.03);
-  torso.add(armBack);
-  part(new THREE.BoxGeometry(0.15, 0.28, 0.16), MAT.jacket, -0.05, -0.13, 0, armBack);
-  part(new THREE.BoxGeometry(0.13, 0.24, 0.14), MAT.jacketDark, -0.12, -0.37, 0, armBack);
-  part(new THREE.BoxGeometry(0.12, 0.12, 0.13), MAT.boots, -0.15, -0.53, 0, armBack);
-
-  // Head: helmet with a goggle band.
-  const head = new THREE.Group();
-  head.position.set(0, 0.78, 0.02);
-  torso.add(head);
-  part(new THREE.BoxGeometry(0.15, 0.13, 0.15), MAT.skin, 0, -0.07, 0, head);
-  // A knitted beanie with a turned-up brim and a bobble, not a helmet — it is
-  // the one spot of warm colour up there and it reads from a long way off.
-  part(new THREE.IcosahedronGeometry(0.175, 0), MAT.beanie, 0, 0.06, 0, head);
-  part(new THREE.CylinderGeometry(0.185, 0.185, 0.075, 8), MAT.beanieBand, 0, -0.03, 0, head);
-  part(new THREE.IcosahedronGeometry(0.055, 0), MAT.beanie, 0, 0.23, 0, head);
-  part(new THREE.BoxGeometry(0.23, 0.09, 0.07), MAT.goggles, 0, -0.02, 0.13, head);
-
-  root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-
-  return { root, tilt, board, body, torso, armFront, armBack, head };
 }

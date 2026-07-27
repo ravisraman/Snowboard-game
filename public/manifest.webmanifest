@@ -1,0 +1,19 @@
+{
+  "name": "Alpine Carve",
+  "short_name": "Alpine Carve",
+  "description": "Downhill snowboarding — carve, spin, grab and butter your way to the village.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0c1a2b",
+  "theme_color": "#0c1a2b",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

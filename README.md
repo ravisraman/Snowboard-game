@@ -11,6 +11,27 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
+## Running it
+
+```bash
+npm run build    # -> dist/, a folder you can put on any static host
+npm run preview  # serves that folder at http://localhost:4173
+npm run bundle   # -> dist/alpine-carve.html, the whole game in one file
+```
+
+The built folder is the primary artifact. It is deployed to GitHub Pages on
+every push to `main` by `.github/workflows/deploy.yml` — the one-time setup is
+Settings → Pages → Source: "GitHub Actions", and nothing after that.
+
+A folder cannot be opened by double-clicking: browsers refuse to let a page
+loaded from your desktop read its neighbouring files, so it needs a server, even
+a trivial one (`npm run preview`, `npx serve dist`, `python3 -m http.server`).
+Two things soften that. The hosted build registers a service worker, so after
+one visit it works offline and can be installed to a phone's home screen. And
+`npm run bundle` still folds everything into a single self-contained HTML file
+that does open by double-clicking, and rides along in the deployed folder so it
+can always be downloaded from the live site.
+
 | Key | Touch | |
 | --- | --- | --- |
 | <kbd>A</kbd> / <kbd>D</kbd> | drag the left thumb | Carve onto the heel or toe edge — in the air, spin |
@@ -87,6 +108,24 @@ IN click handler. iOS Safari will not start audio outside a real gesture, and a
 context created anywhere else stays suspended forever without an error to tell
 you so.
 
+## The rider
+
+The legs are solved, not posed. The boots are bolted to the board, so every bit
+of crouch has to come out of the knees — if the body simply slides down, which
+is what it used to do, the feet sink through the deck. A two-bone IK solve per
+leg pins the boots to the bindings and lets the knees do the absorbing, and that
+is most of what makes the model read as a snowboarder rather than a puppet on a
+plank.
+
+The arms are solved the same way, which is what lets a grab be specified the way
+a rider would describe it — which hand, and where on the board it goes. The
+shoulder swings to face that point and the elbow works itself out. Without the
+swing every grab comes out identical, because an elbow can only bend in one
+plane: a nose grab and an indy would both be the same downward reach.
+
+The limbs are smooth-shaded and round while the mountain is faceted. That is
+deliberate — the rider is the one object the camera never looks away from.
+
 ## Hazards
 
 Trees end a run. Skiers do not: clattering into one costs you the speed, the
@@ -116,6 +155,21 @@ shader that writes its own fragments, so it is tone mapped only by the output
 pass; skipping the chain on phones made them render a visibly different sky from
 desktops. What the phone skips is the bloom and the grade. Multisampling is
 close to free on a tile-based GPU anyway.
+
+Snow is not a diffuse surface, and a standard material insists that it is, so
+three things go back in by hand. Light goes *into* snow and comes back out
+somewhere else, so the terminator between lit and shadowed is soft and slightly
+blue rather than a hard line. It scatters strongly forward, so looking toward
+the sun across a packed piste there is a broad sheen — which is also where the
+bloom finds something worth blooming. And it is made of ice crystals, so it
+glitters: the sparkle is keyed to the camera's own position, which is what turns
+a static speckle into a twinkle as you ride past it.
+
+The board's base, its steel edge and the goggle lens reflect a probe of the sky
+rendered once at startup. A metal with nothing to be metallic *about* comes out
+as flat grey paint, which is what those three were. It is deliberately not
+applied scene-wide: an image-based light on everything changes the snow's
+balance completely, and the snow is hand-tuned.
 
 The panorama is four ranges, each a height field over an annulus wrapped right
 round the horizon and driven by ridged fractal noise. Ordinary fractal noise
@@ -184,15 +238,6 @@ window, and since the field of view is vertical, portrait otherwise spends it
 all on sky and leaves a horizontal view barely wider than the piste. In
 portrait the camera stands further back, widens a little and aims lower.
 
-## Playing without a server
-
-```bash
-npm run bundle     # -> dist/alpine-carve.html
-```
-
-Since nothing is loaded over the network, the whole game folds into one HTML
-file you can open directly, email, or drop on any static host.
-
 ## What's here
 
 Everything is generated at runtime — there are no downloaded models, textures
@@ -225,7 +270,8 @@ src/
     Resort.js             marker poles, netting, chairlift, rocks
     Environment.js        sky, clouds, mountain panorama, lighting
   entities/
-    Rider.js              snowboarder model + ride physics
+    Rider.js              ride physics and posing
+    RiderModel.js         the snowboarder's geometry and rig
     Skiers.js             drifting NPC skiers
   fx/
     SnowSpray.js          carve plume particles

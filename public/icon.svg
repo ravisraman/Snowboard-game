@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f7fc9"/>
+      <stop offset="1" stop-color="#bfe0f5"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#sky)"/>
+  <!-- Ranges: two crestlines, near one darker, same idea as the panorama. -->
+  <path d="M0 300 L70 214 L128 262 L196 178 L268 268 L330 206 L400 272 L462 222 L512 268 L512 512 L0 512 Z" fill="#7ba3cd"/>
+  <path d="M0 348 L88 268 L160 326 L240 250 L316 330 L392 276 L462 336 L512 306 L512 512 L0 512 Z" fill="#dcecf8"/>
+  <!-- The piste, sweeping down to the bottom edge. -->
+  <path d="M196 512 Q236 420 214 356 Q198 306 246 268 L306 268 Q262 316 276 358 Q296 424 322 512 Z" fill="#f7fbff"/>
+  <!-- Board and rider, small and side-on. -->
+  <g transform="translate(256 330) rotate(-14)">
+    <rect x="-52" y="26" width="104" height="13" rx="6" fill="#242a33"/>
+    <rect x="-13" y="-30" width="26" height="52" rx="10" fill="#f4762a"/>
+    <rect x="-11" y="-56" width="22" height="24" rx="10" fill="#f2b431"/>
+  </g>
+</svg>

@@ -89,6 +89,28 @@ export function buildSky() {
   return mesh;
 }
 
+/**
+ * A reflection probe of the sky.
+ *
+ * Rendered once at startup from the sky shader itself, so the board's base, its
+ * steel edge and the goggle lens reflect the actual sky they are under rather
+ * than a guess. Without it a metal has nothing to be metallic *about* and comes
+ * out as flat grey paint — which is what the edge and the goggles looked like.
+ *
+ * Deliberately not applied to the whole scene: giving every material an image
+ * based light changes the snow's balance completely, and the snow's lighting is
+ * hand-tuned.
+ */
+export function buildSkyProbe(renderer) {
+  const scene = new THREE.Scene();
+  scene.add(buildSky());
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const target = pmrem.fromScene(scene, 0, 1, 12000);
+  pmrem.dispose();
+  return target.texture;
+}
+
 /* ------------------------------------------------------------------
  * Peaks
  * ---------------------------------------------------------------- */

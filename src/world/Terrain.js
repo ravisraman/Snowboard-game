@@ -27,6 +27,16 @@ const SHADE_COLOR = new THREE.Color('#dceaf6');   // far-field cooling
 /** How hard the forward-scatter sheen sits on top of the lit surface. */
 const SHEEN_STRENGTH = 0.5;
 
+/**
+ * The subsurface term. `WRAP` is how far light bleeds past the terminator —
+ * 0 is a hard Lambert edge, 1 wraps light all the way round the object.
+ */
+const WRAP = 0.55;
+const WRAP_STRENGTH = 0.5;
+
+/** Brightness of the ice glitter close to the camera. */
+const GLITTER = 0.85;
+
 /** Depth of the wind ripples out in the powder, as a normal perturbation. */
 const SASTRUGI_DEPTH = 0.95;
 
@@ -350,11 +360,37 @@ export function makeSnowMaterial(extra = {}) {
            diffuseColor.rgb *= 1.0 - 0.04 * edge;
          }`
       )
-      // Snow scatters strongly forward: look toward the sun across a packed
-      // piste and there is a broad sheen on it, brightest at grazing angles.
-      // A standard roughness lobe never produces that — it is the one thing a
-      // physically-plain white surface gets conspicuously wrong — and it is
-      // also where the bloom finds something worth blooming.
+      /*
+       * Snow is not a diffuse surface, and a standard material insists that it
+       * is. Three things have to be put back by hand, and together they are
+       * most of the difference between "white plastic" and "snow":
+       *
+       * Light goes *into* snow and comes back out somewhere else. The top
+       * centimetre is a scattering medium, so the terminator between lit and
+       * shadowed is soft and slightly blue rather than a hard line — that is
+       * the wrap term.
+       *
+       * It scatters strongly forward, so looking toward the sun across a
+       * packed piste there is a broad sheen, brightest at grazing angles. This
+       * is also where the bloom finds something worth blooming.
+       *
+       * And it is made of ice crystals, so it glitters: individual facets flash
+       * as you move past them. Keying the sparkle to the camera's own position
+       * is what turns a static speckle into a twinkle.
+       */
+      .replace(
+        '#include <lights_fragment_end>',
+        `#include <lights_fragment_end>
+         {
+           vec3 sunDir = normalize(vec3(${SUN_DIRECTION.x.toFixed(4)}, ${SUN_DIRECTION.y.toFixed(4)}, ${SUN_DIRECTION.z.toFixed(4)}));
+           float ndl = dot(normal, sunDir);
+           // Light wrapped around the terminator, minus what the direct lobe
+           // already accounted for — so this only fills in the shaded side.
+           float wrapped = max(0.0, (ndl + ${WRAP.toFixed(2)}) / ${(1 + WRAP).toFixed(2)});
+           float extra = max(0.0, wrapped - max(0.0, ndl));
+           reflectedLight.indirectDiffuse += diffuseColor.rgb * extra * ${WRAP_STRENGTH.toFixed(3)} * vec3(0.72, 0.82, 1.0);
+         }`
+      )
       .replace(
         '#include <dithering_fragment>',
         `#include <dithering_fragment>
@@ -365,11 +401,22 @@ export function makeSnowMaterial(extra = {}) {
            float graze = 1.0 - abs(dot(normal, viewDir));
            float sheen = pow(forward, 7.0) * pow(graze, 2.2);
            gl_FragColor.rgb += sheen * ${SHEEN_STRENGTH.toFixed(3)};
+
+           // Glitter. The cell hash is offset by the camera's own position, so
+           // which crystals are catching the light changes as you ride past —
+           // a fixed pattern reads as dirt on the lens.
+           float near = 1.0 - smoothstep(6.0, 42.0, length(vWorld - cameraPosition));
+           if (near > 0.01) {
+             vec2 cell = floor(vWorld.xz * 22.0);
+             float flash = hash21(cell + floor(cameraPosition.xz * 3.0));
+             flash = smoothstep(0.9965, 1.0, flash);
+             gl_FragColor.rgb += flash * near * ${GLITTER.toFixed(2)} * vec3(0.9, 0.96, 1.0);
+           }
          }`
       );
   };
 
   // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v4';
+  material.customProgramCacheKey = () => 'alpine-snow-v5';
   return material;
 }

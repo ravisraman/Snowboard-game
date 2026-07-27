@@ -76,3 +76,24 @@ document.addEventListener('visibilitychange', () => {
 if (import.meta.env?.DEV) {
   window.game = game; // handy for tuning from the console
 }
+
+/**
+ * Offline support for the hosted build.
+ *
+ * Registered only in production and only over http(s) — a service worker
+ * cannot be registered from a `file://` page, and the single-file build is
+ * already offline by construction, so there is nothing for it to do there.
+ */
+// The manifest link is the tell: the single-file build writes its own <head>
+// and drops it, and that build has no sibling files to register against.
+const hosted = !!document.querySelector('link[rel="manifest"]');
+
+if (import.meta.env?.PROD && hosted && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    // Relative to the document, not to this module — a project page is served
+    // from a subdirectory and the bundle lives in `assets/` beneath it.
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {
+      /* offline support is a bonus, never a requirement */
+    });
+  });
+}

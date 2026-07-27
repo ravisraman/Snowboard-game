@@ -4,7 +4,8 @@ import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
 import { buildForest } from '../world/Trees.js';
 import { buildVillage } from '../world/Village.js';
-import { buildSky, buildMountains, buildClouds, buildLighting, HORIZON_COLOR } from '../world/Environment.js';
+import { buildSky, buildMountains, buildClouds, buildLighting, buildSkyProbe, HORIZON_COLOR } from '../world/Environment.js';
+import { REFLECTIVE_MATERIALS } from '../entities/RiderModel.js';
 import { buildResort } from '../world/Resort.js';
 import { Rider, RIDER_TUNING } from '../entities/Rider.js';
 import { Skiers } from '../entities/Skiers.js';
@@ -128,6 +129,14 @@ export class Game {
 
     this.rider = new Rider(course);
     this.scene.add(this.rider.model.root);
+
+    // Hand the sky to the few materials that are meant to reflect it.
+    const probe = buildSkyProbe(this.renderer);
+    for (const mat of REFLECTIVE_MATERIALS) {
+      mat.envMap = probe;
+      mat.envMapIntensity = 1.1;
+      mat.needsUpdate = true;
+    }
 
     this.spray = new SnowSpray(this.quality.maxParticles);
     this.scene.add(this.spray.points);

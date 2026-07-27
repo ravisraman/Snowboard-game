@@ -31,8 +31,8 @@ const TIERS = {
   desktop: {
     pixelRatio: 2,
     shadows: true,
-    shadowMapSize: 2048,
-    shadowExtent: 68,
+    shadowMapSize: 4096,
+    shadowExtent: 96,
     softShadows: true,
     maxParticles: 4200,
     treeDensity: 1,
