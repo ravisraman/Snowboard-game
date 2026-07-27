@@ -70,6 +70,12 @@ export class HUD {
       mute: $('btn-mute'),
       diffButtons: [...document.querySelectorAll('.diff-btn')],
       diffBlurb: $('difficulty-blurb'),
+      nameInput: $('name-input'),
+      titleBoard: $('title-board'),
+      finishBoard: $('finish-board'),
+      crashBoard: $('crash-board'),
+      finishBoardMode: $('finish-board-mode'),
+      crashBoardMode: $('crash-board-mode'),
     };
 
     this._last = {
@@ -389,6 +395,114 @@ export class HUD {
       .map((t) => `<li><span>${t.label.replace(/</g, '&lt;')}</span><b>${t.points.toLocaleString('en-US')}</b></li>`)
       .join('');
     el.classList.toggle('on', best.length > 0);
+  }
+
+  /**
+   * Draws a leaderboard into a list.
+   *
+   * `highlight` is the run that has just been filed, matched on its checksum
+   * and timestamp rather than on the name — several rows can share a name, and
+   * the one that matters is the one just ridden.
+   *
+   * Names are set as text nodes rather than interpolated into HTML. They are
+   * cleaned on the way in (`Profile`), but a row that arrives from a server one
+   * day will not have been, and a leaderboard is exactly the sort of place
+   * where somebody else's string ends up on your screen.
+   */
+  fillBoard(el, rows, { highlight = null, limit = 10, mini = false } = {}) {
+    if (!el) return;
+    el.textContent = '';
+    el.classList.toggle('on', rows.length > 0);
+    if (!rows.length) {
+      const empty = document.createElement('li');
+      empty.className = 'board-empty';
+      empty.textContent = mini ? 'No runs yet — be the first.' : 'Nothing on the board yet.';
+      el.appendChild(empty);
+      return;
+    }
+
+    rows.slice(0, limit).forEach((row, i) => {
+      const li = document.createElement('li');
+      li.className = 'board-row';
+      if (highlight && row.checksum === highlight.checksum && row.createdAt === highlight.createdAt) {
+        li.classList.add('is-you');
+      }
+
+      const rank = document.createElement('span');
+      rank.className = 'board-rank';
+      rank.textContent = String(i + 1);
+
+      const name = document.createElement('span');
+      name.className = 'board-name';
+      name.textContent = row.name;
+
+      const score = document.createElement('b');
+      score.className = 'board-score';
+      score.textContent = row.score.toLocaleString('en-US');
+
+      li.append(rank, name, score);
+
+      if (!mini) {
+        const time = document.createElement('span');
+        time.className = 'board-time';
+        // A run that ended in a tree is still a score, but the time is not
+        // comparable with one that reached the village, so it is marked.
+        time.textContent = row.finished ? formatTime(row.timeMs / 1000) : 'DNF';
+        li.appendChild(time);
+      }
+      el.appendChild(li);
+    });
+  }
+
+  /**
+   * The table under a results screen, once the run has been filed.
+   *
+   * Arrives a frame or two after the screen itself — the score is already up,
+   * and waiting on storage to show it would be the wrong trade.
+   */
+  showRunBoard(screen, result, modeLabel) {
+    const board = screen === 'finish' ? this.el.finishBoard : this.el.crashBoard;
+    const mode = screen === 'finish' ? this.el.finishBoardMode : this.el.crashBoardMode;
+    if (mode) mode.textContent = modeLabel ?? '';
+    this.fillBoard(board, result.rows, { highlight: result.entry });
+
+    // If the run landed outside the top ten, say where it actually came — a
+    // board that simply does not mention your run reads as having lost it.
+    if (board && result.rank && result.rank > 10) {
+      const li = document.createElement('li');
+      li.className = 'board-row is-you board-elsewhere';
+      const rank = document.createElement('span');
+      rank.className = 'board-rank';
+      rank.textContent = String(result.rank);
+      const name = document.createElement('span');
+      name.className = 'board-name';
+      name.textContent = result.entry.name;
+      const score = document.createElement('b');
+      score.className = 'board-score';
+      score.textContent = result.entry.score.toLocaleString('en-US');
+      li.append(rank, name, score);
+      board.appendChild(li);
+    }
+  }
+
+  /** The top three on the title screen — enough to be a reason to ride again. */
+  showTitleBoard(rows) {
+    this.fillBoard(this.el.titleBoard, rows, { limit: 3, mini: true });
+  }
+
+  /** The name field, and a callback for when it changes. */
+  setName(name) {
+    if (this.el.nameInput) this.el.nameInput.value = name ?? '';
+  }
+
+  onName(handler) {
+    const input = this.el.nameInput;
+    if (!input) return;
+    const fire = () => handler(input.value);
+    input.addEventListener('change', fire);
+    input.addEventListener('blur', fire);
+    // Enter in the name field should drop in, not submit anything.
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
   }
 
   showCrash(rider, elapsed, distance, score) {

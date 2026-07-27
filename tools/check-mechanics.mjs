@@ -904,6 +904,109 @@ ui.boneHealth = await page.evaluate(() => {
   return { bad, frames, maxCrouch: +maxCrouch.toFixed(3) };
 });
 
+/* ------------------------------------------------------------------
+ * The leaderboard.
+ *
+ * Everything here goes through the same async interface a server would sit
+ * behind, so these assertions keep meaning what they mean the day the store
+ * changes. The one that matters most is the difficulty split: cruise and
+ * original are different games, and a table that mixed them would make the
+ * original's rows unreachable.
+ * ---------------------------------------------------------------- */
+ui.board = await page.evaluate(async () => {
+  const g = window.game;
+  const board = g.leaderboard;
+  await board.clear();
+
+  const file = (name, score, timeMs, difficulty = 'cruise', finished = true) =>
+    board.submit({ name, score, timeMs, difficulty, finished, seed: 1, tricks: 3, topSpeed: 25, bestAir: 1 });
+
+  await file('ALPHA', 1000, 100000);
+  await file('BRAVO', 3000, 90000);
+  await file('CHARLIE', 2000, 80000);
+  // Same score, slower run: the tiebreak should put it second.
+  await file('DELTA', 3000, 95000);
+  // A different game entirely.
+  await file('ECHO', 99999, 60000, 'original');
+
+  const cruise = await board.top('cruise', 10);
+  const original = await board.top('original', 10);
+
+  // A new best should come back as rank 1 and as a personal best.
+  const best = await board.submit({
+    name: 'ALPHA', score: 5000, timeMs: 70000, difficulty: 'cruise',
+    finished: true, seed: 1, tricks: 9, topSpeed: 30, bestAir: 2,
+  });
+
+  // Where a score *would* land, without filing it.
+  const wouldBe = await board.rankOf('cruise', 2500);
+
+  // Overflow: the local store keeps fifty per difficulty, and keeps the best
+  // fifty rather than the last fifty.
+  for (let i = 0; i < 60; i++) await file(`FILL${i}`, i, 100000);
+  const afterFlood = await board.top('cruise', 100);
+
+  // And it has to survive a reload, which is the entire point of storing it.
+  const raw = localStorage.getItem('alpine-carve.scores.v1');
+
+  await board.clear();
+  return {
+    order: cruise.map((r) => r.name),
+    tiebreak: cruise.filter((r) => r.score === 3000).map((r) => r.name),
+    cruiseCount: cruise.length,
+    originalCount: original.length,
+    originalOnly: original.every((r) => r.difficulty === 'original'),
+    bestRank: best.rank,
+    bestIsPersonal: best.isPersonalBest,
+    bestIsTop10: best.isTop10,
+    wouldBe,
+    capped: afterFlood.length,
+    keptTheBest: afterFlood[0]?.score ?? 0,
+    persisted: !!raw && raw.length > 10,
+    dnfKept: cruise.every((r) => typeof r.finished === 'boolean'),
+    hasChecksum: cruise.every((r) => /^[0-9a-f]{8}$/.test(r.checksum)),
+  };
+});
+
+/**
+ * How long the rider's texture atlas takes to build.
+ *
+ * It runs once, on the loading screen, on the main thread — so it is felt as
+ * the game being slow to start rather than as a frame rate. The first version
+ * took 2.7 seconds, nearly all of it a single `getImageData` pulling a
+ * megapixel back off the GPU for the normal map. The budget below is loose
+ * enough to survive a software renderer on a busy machine and tight enough
+ * that putting a whole-canvas readback back would trip it.
+ */
+ui.atlas = await page.evaluate(async () => {
+  // Past the module cache, so this is a real build rather than a hash lookup.
+  const fresh = await import('/src/entities/RiderTextures.js?bench=' + Math.random());
+  const t0 = performance.now();
+  const maps = fresh.riderTextures();
+  const ms = performance.now() - t0;
+  return {
+    ms: +ms.toFixed(0),
+    maps: ['map', 'normalMap', 'roughnessMap'].filter((k) => maps[k]?.image?.width > 0).length,
+    normalHalfRes: maps.normalMap.image.width === maps.map.image.width / 2,
+  };
+});
+
+// The name is asked for once and then remembered. It also has to survive
+// something being pasted into the field that a leaderboard should not carry.
+ui.profile = await page.evaluate(async () => {
+  const { Profile } = await import('/src/services/Profile.js');
+  const p = new Profile();
+  const before = p.known;
+  p.save('  Ravi <b>  ');
+  const cleaned = p.name;
+  const reloaded = new Profile().name;
+  const long = new Profile();
+  long.save('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+  const empty = new Profile();
+  empty.save('');
+  return { before, cleaned, reloaded, capped: long.name.length, fallback: empty.display };
+});
+
 // Rescue teleports the rider, so it must not fire on a stray key press — only
 // once the game has actually offered it.
 ui.rescue = await page.evaluate(() => {
@@ -1026,6 +1129,33 @@ const checks = [
   ['a pause stops the clock', ui.clockDrift === 0, `${ui.clockDrift}s of drift over 0.9s paused`],
   ['closing it resumes the run', ui.resumedState === 'riding' && ui.clockRuns,
     `${ui.resumedState}, clock ${ui.clockRuns ? 'running' : 'stopped'}`],
+  ['the leaderboard ranks by score, then by time',
+    ui.board.order[0] === 'BRAVO' && ui.board.tiebreak.join() === 'BRAVO,DELTA',
+    ui.board.order.join(' > ')],
+  ['cruise and original keep separate tables',
+    ui.board.cruiseCount === 4 && ui.board.originalCount === 1 && ui.board.originalOnly,
+    `${ui.board.cruiseCount} cruise rows, ${ui.board.originalCount} original`],
+  ['a new best comes back as rank one, and as a personal best',
+    ui.board.bestRank === 1 && ui.board.bestIsPersonalBest !== false && ui.board.bestIsTop10,
+    `rank ${ui.board.bestRank}, personal best ${ui.board.bestIsPersonal}`],
+  // 5000, 3000, 3000 sit above it; 2000 and 1000 below.
+  ['a score can be ranked without being filed', ui.board.wouldBe === 4,
+    `2500 points would come ${ui.board.wouldBe}`],
+  ['the board caps itself and keeps the best, not the last',
+    ui.board.capped === 50 && ui.board.keptTheBest === 5000,
+    `${ui.board.capped} rows kept, top is ${ui.board.keptTheBest}`],
+  ['scores survive a reload', ui.board.persisted, 'written to localStorage'],
+  ['every row carries what a server would need',
+    ui.board.hasChecksum && ui.board.dnfKept, 'checksum and finished flag on every row'],
+  ['the name is asked once, cleaned, and remembered',
+    !ui.profile.before && ui.profile.cleaned === 'Ravi b' && ui.profile.reloaded === 'Ravi b',
+    `"${ui.profile.cleaned}" reloaded as "${ui.profile.reloaded}"`],
+  ['a name cannot be longer than the column that shows it',
+    ui.profile.capped === 14 && ui.profile.fallback === 'RIDER',
+    `capped at ${ui.profile.capped}, empty falls back to ${ui.profile.fallback}`],
+  ['the rider\'s textures build without stalling the loading screen',
+    ui.atlas.ms < 600 && ui.atlas.maps === 3 && ui.atlas.normalHalfRes,
+    `${ui.atlas.ms} ms for ${ui.atlas.maps} maps, normals at half res`],
   ['the rider is a single skinned mesh', ui.rig.skinnedMeshes === 1,
     `${ui.rig.skinnedMeshes} skinned meshes, ${ui.rig.vertices} vertices over ${ui.rig.bones} bones`],
   ['every node the posing code drives exists', ui.rig.missing.length === 0,

@@ -29,6 +29,9 @@ export const COURSE = {
 
 export class Course {
   constructor(seed = 20240117) {
+    // Kept, because a score is only comparable with another score from the
+    // same mountain — the leaderboard files it with every run.
+    this.seed = seed;
     this.rng = makeRng(seed);
     this.length = COURSE.length;
     this.finishZ = COURSE.finishZ;

@@ -113,11 +113,20 @@
           <div class="ctrl"><span class="tkey">Tuck</span><span>Hold for speed</span></div>
           <div class="ctrl"><span class="tkey">In the air</span><span>Drag to spin, hold GRAB</span></div>
         </div>
+        <div class="rider-name">
+          <label for="name-input">RIDER</label>
+          <input id="name-input" class="name-input" type="text" maxlength="14"
+                 placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
+        </div>
+
         <div class="difficulty" role="group" aria-label="Difficulty">
           <button id="diff-cruise" class="diff-btn" type="button" data-difficulty="cruise">CRUISE</button>
           <button id="diff-original" class="diff-btn" type="button" data-difficulty="original">ORIGINAL</button>
         </div>
         <p id="difficulty-blurb" class="difficulty-blurb">Slower, floatier, forgiving. Start here.</p>
+
+        <h3 class="board-title board-title-mini">BEST RUNS</h3>
+        <ol id="title-board" class="board board-mini"></ol>
 
         <button id="btn-start" class="cta">DROP IN</button>
         <p class="hint">
@@ -149,6 +158,10 @@
           <div><dt>Top speed</dt><dd id="crash-top">0 km/h</dd></div>
         </dl>
         <ol id="crash-log" class="trick-log"></ol>
+        <div class="board-wrap">
+          <h3 class="board-title">TOP TEN<span id="crash-board-mode" class="board-mode">CRUISE</span></h3>
+          <ol id="crash-board" class="board"></ol>
+        </div>
         <button id="btn-retry" class="cta">RIDE AGAIN</button>
         <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
       </section>
@@ -170,6 +183,10 @@
           <div><dt>Biggest air</dt><dd id="finish-air">0.0 s</dd></div>
         </dl>
         <ol id="finish-log" class="trick-log"></ol>
+        <div class="board-wrap">
+          <h3 class="board-title">TOP TEN<span id="finish-board-mode" class="board-mode">CRUISE</span></h3>
+          <ol id="finish-board" class="board"></ol>
+        </div>
         <button id="btn-again" class="cta">RIDE AGAIN</button>
         <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
       </section>

@@ -87,10 +87,14 @@ export function remapUV(geo, region) {
  * Canvas helpers
  * ---------------------------------------------------------------- */
 
-function canvas(fill) {
+function canvas(fill, willReadFrequently = false) {
   const el = document.createElement('canvas');
   el.width = el.height = SIZE;
-  const ctx = el.getContext('2d');
+  // `willReadFrequently` moves the canvas off the GPU and into main memory.
+  // Without it, the one `getImageData` the normal map needs has to drag a
+  // megapixel back across the bus, and on a software renderer that single call
+  // measured at 2.6 seconds — the whole of a stall on the loading screen.
+  const ctx = el.getContext('2d', { willReadFrequently });
   ctx.fillStyle = fill;
   ctx.fillRect(0, 0, SIZE, SIZE);
   return { el, ctx };
@@ -125,12 +129,20 @@ function weave(ctx, w, h, rng, { dark = 'rgba(0,0,0,0.055)', light = 'rgba(255,2
     ctx.stroke();
   }
   // Broad soft blotches, so the cloth is not perfectly even under the sun.
-  for (let i = 0; i < 26; i++) {
-    const g = ctx.createRadialGradient(rng() * w, rng() * h, 0, rng() * w, rng() * h, 90);
-    g.addColorStop(0, rng() > 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)');
+  //
+  // Filled over the blob's own bounding box rather than the whole region. The
+  // first version filled the full rectangle for each of twenty-six blobs
+  // across eight regions, which is a couple of hundred megapixel fills and was
+  // most of a two-and-a-half second stall on the loading screen.
+  const R = 90;
+  for (let i = 0; i < 14; i++) {
+    const cx = rng() * w;
+    const cy = rng() * h;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+    g.addColorStop(0, rng() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
+    ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
   }
 }
 
@@ -438,13 +450,23 @@ function paintStrap(ctx, w, h, rng, height) {
  * map does that for the cost of one pass over a canvas at start-up.
  */
 function heightToNormal(height, strength = 2.6) {
-  const src = height.ctx.getImageData(0, 0, SIZE, SIZE).data;
-  const out = new ImageData(SIZE, SIZE);
-  const d = out.data;
-  const at = (x, y) => src[((y & (SIZE - 1)) * SIZE + (x & (SIZE - 1))) * 4] / 255;
+  // Run at half resolution. Nine samples per pixel over a megapixel is nearly
+  // ten million array reads on the main thread, and the difference is invisible
+  // — a normal map for stitching and knit has nothing in it that needs a pixel
+  // per texel, and the GPU filters it back up for free.
+  const N = SIZE / 2;
+  const small = document.createElement('canvas');
+  small.width = small.height = N;
+  const sctx = small.getContext('2d', { willReadFrequently: true });
+  sctx.drawImage(height.el, 0, 0, N, N);
 
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
+  const src = sctx.getImageData(0, 0, N, N).data;
+  const out = new ImageData(N, N);
+  const d = out.data;
+  const at = (x, y) => src[((y & (N - 1)) * N + (x & (N - 1))) * 4] / 255;
+
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
       const dx =
         at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1) -
         at(x + 1, y - 1) - 2 * at(x + 1, y) - at(x + 1, y + 1);
@@ -455,7 +477,7 @@ function heightToNormal(height, strength = 2.6) {
       let nx = dx * strength;
       let ny = dy * strength;
       const len = Math.hypot(nx, ny, 1);
-      const i = (y * SIZE + x) * 4;
+      const i = (y * N + x) * 4;
       d[i] = ((nx / len) * 0.5 + 0.5) * 255;
       d[i + 1] = ((ny / len) * 0.5 + 0.5) * 255;
       d[i + 2] = (1 / len) * 255;
@@ -464,7 +486,7 @@ function heightToNormal(height, strength = 2.6) {
   }
 
   const el = document.createElement('canvas');
-  el.width = el.height = SIZE;
+  el.width = el.height = N;
   el.getContext('2d').putImageData(out, 0, 0);
   return el;
 }
@@ -487,7 +509,7 @@ export function riderTextures() {
 
   const rng = makeRng(91117);
   const colour = canvas('#000000');
-  const height = canvas('#808080');
+  const height = canvas('#808080', true);
   const rough = canvas('#b4b4b4');
 
   const parts = [

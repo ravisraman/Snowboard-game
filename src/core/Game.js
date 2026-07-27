@@ -17,7 +17,9 @@ import { Input } from './Input.js';
 import { HUD } from './HUD.js';
 import { Score } from './Score.js';
 import { TouchControls } from './TouchControls.js';
-import { difficulty, applyDifficulty, loadDifficulty } from './Difficulty.js';
+import { difficulty, applyDifficulty, loadDifficulty, presetInfo } from './Difficulty.js';
+import { Leaderboard } from '../services/Leaderboard.js';
+import { Profile } from '../services/Profile.js';
 import { clamp } from './mathx.js';
 
 /**
@@ -91,6 +93,14 @@ export class Game {
     });
     this.hud.setMuted(this.audio.muted);
     this.hud.setDifficulty(this.difficultyName);
+
+    // Who is riding, and what everyone has scored. Both are local for now and
+    // both are read through interfaces that a server can sit behind later.
+    this.profile = new Profile();
+    this.leaderboard = new Leaderboard();
+    this.hud.setName(this.profile.name);
+    this.hud.onName((name) => this.profile.save(name));
+    this._refreshTitleBoard();
 
     this.reset();
     this.hud.showScreen('title');
@@ -230,6 +240,42 @@ export class Game {
     this.difficultyName = name;
     applyDifficulty(name);
     this.hud.setDifficulty(name);
+    // The two difficulties keep separate tables, so the title board has to
+    // follow the switch — otherwise it shows scores from a game you are not
+    // about to play.
+    this._refreshTitleBoard();
+  }
+
+  async _refreshTitleBoard() {
+    this.hud.showTitleBoard(await this.leaderboard.top(this.difficultyName, 3));
+  }
+
+  /**
+   * Files the run that has just ended, and fills in the table under it.
+   *
+   * Deliberately not awaited by the caller: the results screen is already on
+   * screen with the score on it, and a board that appears a frame later is far
+   * better than a results screen that waits for storage. Every failure inside
+   * the leaderboard resolves to an empty table rather than throwing, so there
+   * is nothing here that can take a finished run down with it.
+   */
+  async _fileRun({ finished, elapsed }) {
+    const r = this.rider;
+    const result = await this.leaderboard.submit({
+      name: this.profile.display,
+      score: Math.round(this.score?.total ?? 0),
+      timeMs: elapsed * 1000,
+      tricks: this.score?.tricksLanded ?? 0,
+      topSpeed: r.topSpeed,
+      bestAir: r.longestAir,
+      difficulty: this.difficultyName,
+      seed: this.course.seed ?? 0,
+      finished,
+    });
+
+    this.hud.showRunBoard(finished ? 'finish' : 'crash', result, presetInfo(this.difficultyName).label);
+    this._refreshTitleBoard();
+    return result;
   }
 
   start() {
@@ -372,6 +418,7 @@ export class Game {
       if (this.crashTimer > CRASH_SLOWMO) {
         this.state = 'crashed';
         this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z, this.score);
+        this._fileRun({ finished: false, elapsed: this.elapsed });
       }
     } else if (this.state === 'finished') {
       this.finishTimer += dt;
@@ -380,6 +427,7 @@ export class Game {
       if (this.finishTimer > 1.6 && !this._finishShown) {
         this._finishShown = true;
         this.hud.showFinish(this.rider, this.finishElapsed, this.score);
+        this._fileRun({ finished: true, elapsed: this.finishElapsed });
       }
     }
 

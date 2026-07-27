@@ -60,20 +60,21 @@ const REST = {
 
 const MAT = {
   /**
-   * The whole body: one atlas, one material, one draw call. Physical rather
-   * than standard for the sheen — outerwear and knitwear catch a soft edge of
-   * light that plain roughness cannot express, and the rider is close enough
-   * to the camera for it to be worth the shader.
+   * The whole body: one atlas, one material, one draw call.
+   *
+   * Standard rather than physical. It was physical, for the sheen on the
+   * knitwear — but sheen is a second BRDF lobe evaluated per light per
+   * fragment, it compiles a noticeably larger shader, and against snow that
+   * already lights the character from every direction it was worth almost
+   * nothing. The rim light below does the job it was there for, for a fraction
+   * of the cost.
    */
-  body: new THREE.MeshPhysicalMaterial({
+  body: new THREE.MeshStandardMaterial({
     // Left at 1 so the roughness map is the whole story: it multiplies in, and
     // a material value below 1 would flatten every garment toward the same
     // finish regardless of what the atlas says.
     roughness: 1,
     metalness: 0,
-    sheen: 0.4,
-    sheenRoughness: 0.85,
-    sheenColor: new THREE.Color('#cfe4ff'),
     normalScale: new THREE.Vector2(0.9, 0.9),
   }),
   goggleFrame: new THREE.MeshStandardMaterial({ color: '#1a2029', roughness: 0.45 }),

@@ -79,6 +79,38 @@ assertions against `original` — the numbers there are the ones the ride model
 was designed to — and then compares the two presets directly, so a change that
 quietly made cruise harder than original would fail.
 
+## High scores
+
+Every run is filed against a name, and the top ten come up under the result
+with your own row picked out. The title screen shows the best three, which is
+the whole reason to ride again.
+
+The board lives behind an interface that is async from the first line —
+`submit`, `top`, `rankOf` — with two implementations beside it: `LocalStore`,
+which ships and writes to `localStorage`, and `RemoteStore`, which is a `fetch`
+against the same three methods and is not wired to anything. Swapping them is
+one argument to a constructor. Everything above that line — the tables, the
+highlighting, the personal-best detection — is written once and does not know
+or care which one is underneath.
+
+Rows carry the shape a server would need, not the shape the local store needs:
+name, score, time, tricks, top speed, best air, difficulty, course seed,
+whether the run actually finished, a version, and a checksum over the run
+summary. `seed` and `checksum` are dead weight today and deliberately so —
+adding them now costs nothing, and adding them later means migrating
+everything already stored. The checksum is not security; nothing running in
+the player's own browser can be. It ties a score to the rest of its summary so
+a server can reject a row whose numbers were edited without being re-signed.
+
+Cruise and original keep **separate tables**. They are different games — the
+same rider scores far more where the air is longer and the landings forgive
+more — and one shared table would make the original's rows unreachable and the
+comparison meaningless.
+
+Ranking is by score, and a faster time breaks a tie. A run that ended in a tree
+still scores, and is shown as **DNF** rather than with a time that cannot be
+compared to one that reached the village.
+
 ## Tricks and scoring
 
 There are four grabs, and the awkward ones pay more — that is the whole reason
@@ -375,6 +407,9 @@ src/
     RiderModel.js         the snowboarder's geometry, skeleton and skinning
     RiderTextures.js      the rider's texture atlas, painted on a canvas
     Skiers.js             drifting NPC skiers
+  services/
+    Leaderboard.js        the score table, local now and server-shaped
+    Profile.js            who is riding
   fx/
     SnowSpray.js          carve plume particles
     SnowTracks.js         the trench the board leaves behind
