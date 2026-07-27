@@ -328,7 +328,7 @@ const results = await page.evaluate(() => {
       for (let i = 0; i < 900; i++) {
         r.boardYaw = r.yaw + (deg * Math.PI) / 180;   // hold the board off-axis
         r.update(dt, NONE);
-        if (r.trickFailed) return 'washed out';
+        if (r.trickFailed) return r.crashed ? 'crashed out' : 'washed out';
         if (r.trickLanded) return r.trickLanded.clean ? 'clean' : 'sketchy';
       }
       return 'never landed';
@@ -355,6 +355,57 @@ const results = await page.evaluate(() => {
       }
     }
     out.treeClearance = { metres: +worst.toFixed(2), atZ: where, counted: seen.size };
+  }
+
+  /**
+   * A tree square on ends the run; a tree clipped in passing does not.
+   *
+   * This is the rule that decides whether the mountain is ridable, so it is
+   * worth pinning: aim the rider straight at a trunk, then at one offset far
+   * enough to the side that a shoulder catches it, and check the two outcomes
+   * differ.
+   */
+  {
+    const realTrees = g.trees;
+
+    const runAt = (fraction) => {
+      g.reset();
+      g.state = 'riding';
+
+      // One tree, placed by hand. Using a real one from the forest means the
+      // rider can meet a *different* trunk on the way in and the test measures
+      // the wrong collision.
+      const rr = g.rider;
+      const z = 700;
+      const tree = { x: c.centerX(z), z, r: 1.1 };
+      g.trees = { query: () => [tree] };
+
+      const reach = tree.r + 0.62;
+      rr.reset();
+      rr.position.set(tree.x - fraction * reach, 0, tree.z - 26);
+      rr.yaw = 0;
+      rr.speed = 20;
+      rr.settle();
+
+      const fake = { steer: 0, tuck: false, brake: false, press: false, grabType: null,
+        jumpPressed: false, restartPressed: false, helpPressed: false, endFrame() {}, clear() {} };
+      const realInput = g.input;
+      g.input = fake;
+      for (let i = 0; i < 600; i++) {
+        g.update(1 / 120);
+        if (g.state !== 'riding') break;
+        if (rr.stumbleTime > 0 && rr.position.z > tree.z) break;
+      }
+      g.input = realInput;
+      return rr.crashed ? `crashed: ${rr.crashReason}` : (rr.stumbleTime > 0 ? 'brushed past' : 'missed');
+    };
+
+    out.trees = { squareOn: runAt(0), glancing: runAt(0.8) };
+    g.trees = realTrees;
+    // Back to the title, or `start()` further down sees a run already in
+    // progress and returns without resetting anything.
+    g.state = 'title';
+    g.reset();
   }
 
   /* The track ribbon must wrap its ring buffer without tearing. */
@@ -639,7 +690,10 @@ await browser.close();
 
 const checks = [
   ['no console errors', consoleErrors.length === 0, consoleErrors.join('; ')],
-  ['carve holds a 10-20 m radius', results.carve.radiusM > 9 && results.carve.radiusM < 21, `${results.carve.radiusM} m`],
+  // The lower bound was 9 m until the board was given enough bite to dodge
+  // something at speed. A real carve runs 8-15 m, so this is still inside what
+  // a snowboard does; what it must not become is a car on rails.
+  ['carve holds an 8-20 m radius', results.carve.radiusM > 8 && results.carve.radiusM < 21, `${results.carve.radiusM} m`],
   ['carve turns 35-80 deg/s', results.carve.degPerSec > 35 && results.carve.degPerSec < 80, `${results.carve.degPerSec} deg/s`],
   ['powder costs real speed', results.powder.kmhAfterPowder < results.powder.kmhAfterPiste * 0.7,
     `${results.powder.kmhAfterPowder} vs ${results.powder.kmhAfterPiste} km/h`],
@@ -673,6 +727,12 @@ const checks = [
   ['a shifty scores as a shifty, not as a rotation',
     results.shifty.shifty && results.shifty.netDegrees < 30,
     `net ${results.shifty.netDegrees} deg, shifty ${results.shifty.shifty}`],
+  ['a tree square on ends the run, one clipped in passing does not',
+    results.trees.squareOn.startsWith('crashed') && results.trees.glancing === 'brushed past',
+    `square on: ${results.trees.squareOn}, glancing: ${results.trees.glancing}`],
+  ['washing out a landing costs the trick, not the run',
+    results.landings[90] === 'washed out',
+    `at 90 degrees: ${results.landings[90]}`],
   ['landing angle decides the outcome',
     results.landings[0] === 'clean' && results.landings[30] === 'clean' &&
     results.landings[50] === 'sketchy' && results.landings[90] === 'washed out' &&

@@ -19,7 +19,11 @@ export const COURSE = {
   startZ: 24,
   finishZ: 2870,
   halfWidth: 190,      // how far the meshed terrain extends either side of the track
-  trackHalfWidth: 13,  // groomed corduroy half-width
+  // Groomed corduroy half-width. Wider than a real piste of this pitch, and
+  // deliberately so: at a hundred and twenty km/h a board covers thirty-odd
+  // metres a second, and the margin for a wobble has to be measured in the same
+  // units as the speed.
+  trackHalfWidth: 16,
   edgeSoftness: 3.2,   // metres of blend between corduroy and powder
 };
 

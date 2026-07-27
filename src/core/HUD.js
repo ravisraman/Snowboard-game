@@ -192,9 +192,10 @@ export class HUD {
   }
 
   /** Says what just happened, so a sudden loss of speed is not a mystery. */
-  flashBump() {
+  flashBump(text = 'CLIPPED A SKIER') {
     const el = this.el.bump;
     if (!el) return;
+    el.textContent = text;
     el.classList.remove('on');
     void el.offsetWidth;   // reflow, or the re-add is coalesced away
     el.classList.add('on');

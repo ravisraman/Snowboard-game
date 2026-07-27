@@ -255,6 +255,27 @@ export class Game {
     this.spray.burst(r.position, 40, 4, 0.6);
   }
 
+  /**
+   * Clipping a tree in passing rather than hitting it square. Costs the speed
+   * and the streak, and shoves the rider clear so the next frame is not simply
+   * the same collision again — deeper, and fatal.
+   */
+  _brush(tree, dx, dz, d2) {
+    const r = this.rider;
+    if (!r.stumble()) return;
+
+    const d = Math.max(0.001, Math.sqrt(d2));
+    const push = (tree.r + RIDER_TUNING.riderRadius) - d + 0.25;
+    r.position.x -= (dx / d) * push;
+    r.position.z -= (dz / d) * push;
+
+    this.score.onCrash();
+    this.audio.crash();
+    this.chase.kick(1.3);
+    this.spray.burst(r.position, 40, 4, r.powder);
+    this.hud.flashBump('CLIPPED A TREE');
+  }
+
   _crash(reason) {
     if (this.state !== 'riding') return;
     this.touch.setVisible(false);
@@ -348,6 +369,15 @@ export class Game {
       this.score.update(sdt, this.rider);
       if (this.rider.trickLanded) this.score.onTrickLanded(this.rider.trickLanded);
       if (this.rider.groundTrick) this.score.onGroundTrick(this.rider.groundTrick);
+      if (this.rider.trickFailed) {
+        // Washed out. No longer the end of the run, but it costs the streak and
+        // most of the speed, and it needs to look and sound like a mistake.
+        this.score.onCrash();
+        this.audio.fail();
+        this.chase.kick(1.4);
+        this.spray.burst(this.rider.position, 60, 5, this.rider.powder);
+        this.hud.flashBump('WASHED OUT');
+      }
       this._emitAudio();
       this._checkHazards();
       this._trackStuck(dt);
@@ -476,7 +506,23 @@ export class Game {
         const d2 = dx * dx + dz * dz;
         const rr = t.r + RIDER_TUNING.riderRadius;
         if (d2 < rr * rr) {
-          this._crash('You found a tree the hard way.');
+          // Square on, or a shoulder clipped in passing? The honest test is how
+          // far off the travel line the trunk sits, not how deep the overlap
+          // got: at thirty metres a second you cross a whole collider between
+          // frames, so depth says more about the frame rate than about the hit.
+          const lateral = Math.abs(-dx * this.rider.forwardZ + dz * this.rider.forwardX);
+          if (lateral > rr * 0.55) {
+            // Geometry decides this, and it decides it every frame the contact
+            // lasts. Letting the "already counted" guard fall through to the
+            // crash instead made the *second* frame of a graze fatal — you were
+            // shoved clear and then killed by the tree you had just cleared.
+            if (!this._bumped.has(t)) {
+              this._bumped.add(t);
+              this._brush(t, dx, dz, d2);
+            }
+          } else {
+            this._crash('You found a tree the hard way.');
+          }
           return;
         }
         // Threading a gap at speed is the most fun thing you can do off-piste,

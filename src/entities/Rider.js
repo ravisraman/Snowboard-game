@@ -36,7 +36,8 @@ const TUNING = {
   skatePush: 3.4,         // m/s gained per skate
   leanStiffness: 36,      // spring toward the commanded edge
   leanDamping: 8.5,
-  maxCurvature: 1 / 15.5, // tightest carve radius, in 1/metres
+  maxCurvature: 1 / 13, // tightest carve radius, in 1/metres — enough to get
+                        // out of the way of something you have just seen
   powderGrip: 0.55,       // edge authority retained in deep snow
 
   spinRate: 5.2,          // rad/s the board rotates in the air (~1.2 s per 360)
@@ -521,9 +522,17 @@ export class Rider {
     const settled = this.yaw + (this.switchStance ? Math.PI : 0);
     this.boardYaw = settled + angleDelta(settled, this.boardYaw);
 
+    // Landing sideways used to end the run, and it was by some distance the
+    // most common way a run ended: coming off a kicker at a hundred km/h with
+    // any rotation at all, an eye for the exact moment the board comes back
+    // round is a lot to ask. It is a hard stumble now — you lose most of your
+    // speed and the streak, and you have to gather it back up — which is what
+    // washing out actually feels like. Trees still end it.
     if (align > TUNING.landSketchyTol) {
       this.trickFailed = true;
-      this.crash('You landed sideways.');
+      this.stumble();
+      this.boardYaw = settled;   // slammed back square rather than left crooked
+      this.switchStance = false;
       return;
     }
 
