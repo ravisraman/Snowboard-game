@@ -28,6 +28,7 @@ export class Course {
     this.rng = makeRng(seed);
     this.length = COURSE.length;
     this.finishZ = COURSE.finishZ;
+    this.trackHalfWidth = COURSE.trackHalfWidth;
 
     this._buildBaseProfile();
     this._buildKickers();

@@ -21,14 +21,23 @@ const TRUNK_COLOR = new THREE.Color('#5a4433');
 const SNOW_COLOR = new THREE.Color('#fafdff');
 const SNOW_SHADE = new THREE.Color('#dceaf7');
 
-/** Length of one frustum-cullable slice of forest, in metres. */
-const FOREST_CHUNK = 150;
+/**
+ * Length of one frustum-cullable slice of forest, in metres. Longer than it was
+ * once there were six variants rather than four: every variant needs its own
+ * instanced mesh per slice, so the draw-call count is the product of the two.
+ */
+const FOREST_CHUNK = 230;
 
 const VARIANTS = [
   { tiers: 3, radius: 1.95, height: 5.6, sides: 8, green: '#2f6351', taper: 0.7 },
   { tiers: 4, radius: 1.7, height: 6.8, sides: 8, green: '#285848', taper: 0.75 },
   { tiers: 3, radius: 2.2, height: 4.9, sides: 9, green: '#376e57', taper: 0.66 },
   { tiers: 4, radius: 1.5, height: 7.6, sides: 7, green: '#245043', taper: 0.78 },
+  // A young, narrow spruce and a squat old one that has lost its point. Two
+  // more silhouettes is the cheapest possible variety: a treeline made of one
+  // shape repeated is read as a pattern long before it is read as a forest.
+  { tiers: 5, radius: 1.15, height: 8.4, sides: 7, green: '#1f4a3e', taper: 0.83 },
+  { tiers: 2, radius: 2.5, height: 3.6, sides: 9, green: '#3d7a5f', taper: 0.58 },
 ];
 
 /**
@@ -179,11 +188,20 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
     for (let a = 0; a < attempts; a++) {
       const side = rng() < 0.5 ? -1 : 1;
 
+      // Which tree this is gets decided first, because how close it is allowed
+      // to stand to the piste depends on how wide it is. Deciding the position
+      // first and the tree afterwards is how a squat variant ends up with its
+      // collider reaching over the groomed line, waiting to end a run that never
+      // left the piste.
+      const vi = rng.int(0, VARIANTS.length - 1);
+      const scale = 0.62 + rng() * 0.95;
+      const treeR = VARIANTS[vi].radius * scale * 0.42 + 0.35;
+
       // Most trees live in the forest band; a few crowd the edge of the piste.
       let u;
       const roll = rng();
       if (roll < 0.045) {
-        u = side * (COURSE.trackHalfWidth + 0.4 + rng() * 3.2); // encroaching
+        u = side * (COURSE.trackHalfWidth + treeR + 0.5 + rng() * 2.8); // encroaching
       } else if (roll < 0.6) {
         u = side * (COURSE.trackHalfWidth + 4 + rng() * 26);
       } else if (roll < 0.86) {
@@ -212,16 +230,12 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
       // church steeple are actually visible on the run in to the finish.
       if (zj > 2820 && Math.abs(u) < 70 && rng() > 0.16) continue;
 
-      const vi = rng.int(0, VARIANTS.length - 1);
-      const scale = 0.62 + rng() * 0.95;
       const y = course.terrainHeight(x, zw);
 
       placements[vi].push({ x, y, z: zw, scale, yaw: rng() * Math.PI * 2, tint: 0.9 + rng() * 0.18 });
       // The far band is scenery for the mid-ground only — the rider is out of
       // bounds long before reaching it, so it needs no colliders.
-      if (Math.abs(u) < COURSE.halfWidth) {
-        colliders.push({ x, z: zw, r: VARIANTS[vi].radius * scale * 0.42 + 0.35 });
-      }
+      if (Math.abs(u) < COURSE.halfWidth) colliders.push({ x, z: zw, r: treeR });
     }
   }
 
@@ -233,6 +247,38 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
     roughness: 0.85,
     metalness: 0,
   });
+
+  /**
+   * Sway, in the vertex shader.
+   *
+   * Displacement grows with the square of height above the ground, which is
+   * what makes it look like a tree bending rather than a tree sliding: the
+   * trunk barely moves and the top does most of the travelling. The phase comes
+   * from the instance's own world position, so no two trees are in step —
+   * a forest moving as one is much worse than a forest not moving at all.
+   */
+  const swayUniforms = { uTime: { value: 0 } };
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = swayUniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n uniform float uTime;`)
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         {
+           #ifdef USE_INSTANCING
+             float phase = instanceMatrix[3][0] * 0.7 + instanceMatrix[3][2] * 0.43;
+           #else
+             float phase = 0.0;
+           #endif
+           float h = max(transformed.y, 0.0);
+           float amp = h * h * 0.0035;
+           transformed.x += sin(uTime * 1.15 + phase) * amp;
+           transformed.z += cos(uTime * 0.83 + phase * 1.7) * amp * 0.65;
+         }`
+      );
+  };
+  material.customProgramCacheKey = () => 'alpine-pine-sway';
 
   const dummy = new THREE.Object3D();
   const tint = new THREE.Color();
@@ -272,7 +318,9 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
     }
   });
 
-  return { group, colliders: bucketColliders(colliders) };
+  const update = (dt) => { swayUniforms.uTime.value += dt; };
+
+  return { group, colliders: bucketColliders(colliders), update };
 }
 
 /** Buckets colliders by z so the rider only tests a handful per frame. */

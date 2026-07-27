@@ -27,6 +27,9 @@ const SHADE_COLOR = new THREE.Color('#dceaf6');   // far-field cooling
 /** How hard the forward-scatter sheen sits on top of the lit surface. */
 const SHEEN_STRENGTH = 0.5;
 
+/** Depth of the wind ripples out in the powder, as a normal perturbation. */
+const SASTRUGI_DEPTH = 0.95;
+
 /** Corduroy ridge spacing and depth, in metres. A groomer's tiller is fine. */
 const CORDUROY_PERIOD = 0.3;
 const CORDUROY_DEPTH = 0.011;
@@ -37,7 +40,15 @@ const TERRAIN_REACH = 620;
 /** Length of one frustum-cullable slice of slope, in metres. */
 const CHUNK_LENGTH = 190;
 
-export function buildTerrain(course, quality = {}) {
+/**
+ * Contact shading: how dark the snow goes right at the foot of something, and
+ * how far out it reaches. Cheap, baked, and worth more than it looks — a tree
+ * standing on unshaded snow reads as a sticker laid on top of the slope.
+ */
+const AO_STRENGTH = 0.3;
+const AO_REACH = 2.4;
+
+export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
   const offsets = buildOffsetColumns(quality.skirtStep ?? 28);
   const zFrom = -70;
   const zTo = COURSE.length + 420;
@@ -89,6 +100,18 @@ export function buildTerrain(course, quality = {}) {
       color.copy(GROOMED_COLOR).lerp(POWDER_COLOR, powder);
       // Very slight cooling far from the track keeps the eye on the line.
       color.lerp(SHADE_COLOR, smoothstep(60, 175, au) * 0.35);
+
+      // Pool a little shade around the base of every trunk. The real thing is
+      // ambient occlusion plus the tree's own snow shadow plus the drift that
+      // always collects there; one darkened vertex ring stands in for all three.
+      if (occluders) {
+        let shade = 0;
+        for (const o of occluders.query(z)) {
+          const d = Math.hypot(o.x - x, o.z - z) - o.r;
+          if (d < AO_REACH) shade = Math.max(shade, 1 - smoothstep(0, AO_REACH, Math.max(d, 0)));
+        }
+        if (shade > 0) color.lerp(SHADE_COLOR, shade * AO_STRENGTH);
+      }
 
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
@@ -252,6 +275,16 @@ export function makeSnowMaterial(extra = {}) {
            p = fract(p * vec2(233.34, 851.73));
            p += dot(p, p + 23.45);
            return fract(p.x * p.y);
+         }
+
+         // Wind-scoured ripples in the untracked snow. Two waves crossed at an
+         // angle, because sastrugi are cut by wind that has shifted over days —
+         // a single sine reads as corrugated iron, not as a snowfield.
+         float sastrugi(vec2 p) {
+           float a = sin(dot(p, vec2(0.82, 0.57)) * 1.15);
+           float b = sin(dot(p, vec2(-0.42, 0.91)) * 0.47 + 1.7);
+           float c = sin(dot(p, vec2(0.94, -0.34)) * 2.6 + 0.4);
+           return a * 0.5 + b * 0.34 + c * 0.16;
          }`
       )
       // The grooming is bumped into the *normal*, not painted into the colour.
@@ -273,6 +306,20 @@ export function makeSnowMaterial(extra = {}) {
                float slope = cos(vU * CORD_K) * CORD_K * ${CORDUROY_DEPTH.toFixed(4)};
                normal = normalize(normal - uDir * slope * fade);
              }
+           }
+
+           // The powder gets the same treatment at a much coarser scale: wind
+           // ripples bumped into the normal rather than painted on, so they
+           // catch the light from one side exactly as the corduroy does.
+           float offPiste = 1.0 - onPiste;
+           float ripFade = 1.0 - smoothstep(30.0, 130.0, length(vWorld - cameraPosition));
+           float rip = offPiste * ripFade * ${SASTRUGI_DEPTH.toFixed(4)};
+           if (rip > 0.0005) {
+             float e = 0.35;
+             float h0 = sastrugi(vWorld.xz);
+             float dx = sastrugi(vWorld.xz + vec2(e, 0.0)) - h0;
+             float dz = sastrugi(vWorld.xz + vec2(0.0, e)) - h0;
+             normal = normalize(normal - vec3(dx, 0.0, dz) * rip / e);
            }
          }`
       )
@@ -323,6 +370,6 @@ export function makeSnowMaterial(extra = {}) {
   };
 
   // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v3';
+  material.customProgramCacheKey = () => 'alpine-snow-v4';
   return material;
 }

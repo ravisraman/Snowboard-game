@@ -37,6 +37,7 @@ export class SnowSpray {
     // every frame don't steal each other's remainders.
     this._carveCarry = 0;
     this._trailCarry = 0;
+    this._driftCarry = 0;
 
     const positions = new Float32Array(MAX_PARTICLES * 3);
     const aSize = new Float32Array(MAX_PARTICLES);
@@ -179,6 +180,44 @@ export class SnowSpray {
         (0.035 + Math.random() * 0.06) * (1 + powder * 0.5),
         0.26 + Math.random() * 0.26,
         0.8
+      );
+    }
+  }
+
+  /**
+   * Spindrift: loose snow lifting off the open slope and streaming downwind.
+   *
+   * Nothing to do with the rider — it is weather, and it is the only thing in
+   * the scene that moves when the player is standing still. Emitted in a broad
+   * band ahead of and beside the camera, because a particle behind you is a
+   * particle you paid for and never saw.
+   */
+  emitDrift(centre, yaw, wind, dt) {
+    this._driftCarry += (wind.rate ?? 26) * dt;
+    let n = Math.floor(this._driftCarry);
+    this._driftCarry -= n;
+    if (n > 24) n = 24;
+
+    const fx = Math.sin(yaw);
+    const fz = Math.cos(yaw);
+
+    for (let k = 0; k < n; k++) {
+      // Ahead of the rider and spread wide across the slope.
+      const ahead = 8 + Math.random() * 55;
+      const across = (Math.random() * 2 - 1) * 42;
+      const x = centre.x + fx * ahead + fz * across;
+      const z = centre.z + fz * ahead - fx * across;
+
+      this._spawn(
+        x,
+        wind.groundAt(x, z) + Math.random() * 0.5,
+        z,
+        wind.x * (0.6 + Math.random() * 0.9),
+        0.35 + Math.random() * 1.1,
+        wind.z * (0.6 + Math.random() * 0.9),
+        0.03 + Math.random() * 0.05,
+        1.1 + Math.random() * 1.4,
+        0.5
       );
     }
   }

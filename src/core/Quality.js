@@ -54,6 +54,8 @@ const TIERS = {
     rocks: true,
     rockDensity: 1,
     clouds: true,
+    spindrift: true,
+    driftRate: 62,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -91,6 +93,10 @@ const TIERS = {
     rocks: true,
     rockDensity: 0.45,
     clouds: true,
+    // Drift competes with the carve plume for the same, much smaller, particle
+    // budget, so it thins out rather than disappearing.
+    spindrift: true,
+    driftRate: 24,
   },
 };
 

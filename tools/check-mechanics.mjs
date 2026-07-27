@@ -336,6 +336,27 @@ const results = await page.evaluate(() => {
     out.landings = { 0: landAt(0), 30: landAt(30), 50: landAt(50), 90: landAt(90), 180: landAt(180) };
   }
 
+  /**
+   * No tree may reach over the groomed line. Trees are placed by offset and
+   * sized separately, so a wide variant landing in the "encroaching" band is
+   * all it takes to leave a collider sitting on the piste — a run ended by a
+   * tree the rider never went near.
+   */
+  {
+    let worst = Infinity;
+    let where = 0;
+    const seen = new Set();
+    for (let z = 0; z < c.finishZ; z += 6) {
+      for (const t of g.trees.query(z)) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        const clearance = Math.abs(c.trackOffset(t.x, t.z)) - t.r - c.trackHalfWidth;
+        if (clearance < worst) { worst = clearance; where = Math.round(t.z); }
+      }
+    }
+    out.treeClearance = { metres: +worst.toFixed(2), atZ: where, counted: seen.size };
+  }
+
   /* The track ribbon must wrap its ring buffer without tearing. */
   {
     const g2 = window.game;
@@ -625,6 +646,9 @@ const checks = [
   ['one-shots fire without throwing', audio.oneShots === 'ok', audio.oneShots],
   ['mute silences the master', audio.muted === 0, `master ${audio.muted}`],
   ['kickers get hit on the way down', results.run.airs >= 3, `${results.run.airs} airs`],
+  ['no tree reaches over the groomed line',
+    results.treeClearance.metres > 0,
+    `closest is ${results.treeClearance.metres} m clear at z=${results.treeClearance.atZ}, over ${results.treeClearance.counted} trees`],
   ['the tracker has a tick for every kicker',
     results.tracker.ticks === results.tracker.kickers,
     `${results.tracker.ticks} ticks for ${results.tracker.kickers} kickers`],

@@ -59,6 +59,16 @@ export class Game {
 
     this._buildWorld();
 
+    // A steady cross-slope breeze, blowing across the fall line rather than
+    // down it — which is what makes the drift read as wind rather than as
+    // something the rider is kicking up.
+    this._wind = {
+      x: -4.6,
+      z: 1.4,
+      rate: quality.driftRate ?? 26,
+      groundAt: (x, z) => this.course.groundHeight(x, z),
+    };
+
     this.state = 'title';
     this.elapsed = 0;
     this.crashTimer = 0;
@@ -95,7 +105,6 @@ export class Game {
 
     this.lights = buildLighting(this.scene, this.quality);
 
-    this.scene.add(buildTerrain(course, this.quality));
     this.scene.add(buildKickers(course));
 
     const village = buildVillage(course);
@@ -104,10 +113,15 @@ export class Game {
     this.resort = buildResort(course, this.quality);
     this.scene.add(this.resort.group);
 
+    // The forest goes up before the slope does, so the slope can bake a ring of
+    // contact shade into the snow around every trunk.
     const keepClear = (x, z) => village.exclude(x, z) || this.resort.exclude(x, z);
     const forest = buildForest(course, { exclude: keepClear, quality: this.quality });
     this.scene.add(forest.group);
     this.trees = forest.colliders;
+    this.forest = forest;
+
+    this.scene.add(buildTerrain(course, { quality: this.quality, occluders: forest.colliders }));
 
     this.skiers = new Skiers(course);
     this.scene.add(this.skiers.group);
@@ -337,6 +351,7 @@ export class Game {
     this.touch.setAirborne(!this.rider.grounded && this.state === 'riding');
     this.skiers.update(sdt, this.rider.position.z);
     this.resort.update(sdt);
+    this.forest.update(sdt);
     this.audio.update(this.rider, this.state === 'riding');
     this.tracks.update(this.rider);
     this._emitSpray(sdt);
@@ -402,6 +417,13 @@ export class Game {
 
   _emitSpray(dt) {
     const r = this.rider;
+
+    // Weather, not the rider: loose snow streaming off the open slope. It is
+    // the only thing in the scene that moves when you are standing still.
+    if (this.quality.spindrift !== false) {
+      this.spray.emitDrift(r.position, r.yaw, this._wind, dt);
+    }
+
     if (r.crashed) {
       // Rooster tail of snow while the wipeout slides out.
       if (r.speed > 2) this.spray.burst(r.position, 3, 2 + r.speed * 0.12, r.powder);
