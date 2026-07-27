@@ -232,6 +232,49 @@ const results = await page.evaluate(() => {
     out.landings = { 0: landAt(0), 30: landAt(30), 50: landAt(50), 90: landAt(90), 180: landAt(180) };
   }
 
+  /* The track ribbon must wrap its ring buffer without tearing. */
+  {
+    const g2 = window.game;
+    g2.tracks.reset();
+    const t = g2.tracks;
+    const total = t.segments;
+
+    // Drive far enough to wrap the buffer right round and start overwriting.
+    r.reset();
+    r.position.set(c.centerX(400), 0, 400);
+    r.yaw = c.trackHeading(400);
+    r.speed = 24;
+    r.settle();
+    for (let i = 0; i < 120 * 90; i++) {
+      const lookZ = r.position.z + Math.max(14, r.speed * 1.6);
+      let d = Math.atan2(c.centerX(lookZ) - r.position.x, lookZ - r.position.z) - r.yaw;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      r.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 3.2)) });
+      t.update(r);
+      if (r.crashed || r.position.z > c.finishZ - 40) break;
+    }
+
+    const attr = t.mesh.geometry.attributes;
+    let nan = 0;
+    let worstDrop = 0;
+    for (let k = 0; k < attr.position.count; k++) {
+      const x = attr.position.getX(k);
+      const y = attr.position.getY(k);
+      const z = attr.position.getZ(k);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) nan++;
+      if (attr.aAlpha.getX(k) > 0.01) {
+        worstDrop = Math.max(worstDrop, Math.abs(y - (c.groundHeight(x, z) + 0.03)));
+      }
+    }
+    out.tracks = {
+      wrapped: t.filled >= total,
+      nanVertices: nan,
+      // Every visible vertex must sit on the analytic surface, not float or sink.
+      worstHeightError: +worstDrop.toFixed(4),
+    };
+  }
+
   /* And the whole run has to be completable without touching anything. */
   {
     for (const s of g.skiers.skiers) s.mesh.visible = false;
@@ -381,6 +424,10 @@ const checks = [
   ['one-shots fire without throwing', audio.oneShots === 'ok', audio.oneShots],
   ['mute silences the master', audio.muted === 0, `master ${audio.muted}`],
   ['kickers get hit on the way down', results.run.airs >= 3, `${results.run.airs} airs`],
+  ['the track ribbon wraps its ring buffer', results.tracks.wrapped, `filled the whole buffer`],
+  ['the ribbon holds no NaN vertices', results.tracks.nanVertices === 0, `${results.tracks.nanVertices} bad vertices`],
+  ['every visible ribbon vertex sits on the snow', results.tracks.worstHeightError < 0.001,
+    `worst error ${results.tracks.worstHeightError} m`],
 ];
 
 console.log(JSON.stringify(results, null, 2));

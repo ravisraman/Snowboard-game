@@ -41,6 +41,7 @@ const TIERS = {
     skirtStep: 28,
     fogDensity: 0.0026,
     audio: true,
+    trackSegments: 2600,
   },
   mobile: {
     // Capping the pixel ratio is by far the biggest single win, and on a phone
@@ -58,6 +59,7 @@ const TIERS = {
     // Slightly thicker air pulls the far draw in without showing an edge.
     fogDensity: 0.0034,
     audio: true,
+    trackSegments: 1100,
   },
 };
 

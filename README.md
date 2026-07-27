@@ -1,8 +1,10 @@
 # Alpine Carve
 
 A downhill snowboarding game in Three.js. Drop in at the top of an alpine
-resort, carve a groomed piste through the pines, hit the kickers, and make the
-village at the bottom without putting yourself into a tree.
+resort, carve a groomed piste through the pines, spin off the kickers, and make
+the village at the bottom without putting yourself into a tree. The run is
+scored, not timed: air, rotation, grabs, clean landings and near misses all pay,
+and a combo multiplier climbs while you keep stringing them together.
 
 ```bash
 npm install
@@ -18,7 +20,57 @@ npm run dev      # http://localhost:5173
 | <kbd>E</kbd> | tap the prompt | Drop back onto the piste |
 | <kbd>R</kbd> | tap the prompt | Restart the run, at any time |
 
-Arrow keys work too. Your best time is kept in `localStorage`.
+Arrow keys work too. In the air, carve left or right to spin and hold brake to
+grab. Your best score and best time are both kept in `localStorage`.
+
+## Tricks and scoring
+
+Off a lip the board's heading comes apart from the direction you're travelling:
+you keep flying the way you were going, and the steering now spins the board
+instead of turning the flight path. A spin has to be *asked for*, though —
+carrying a carve through the lip is ordinary riding, and if a held edge kept
+rotating the board in the air every kicker would fling you into an unasked-for
+360 and wash you out on the other side. Let go of the steering once after
+take-off and the spin arms.
+
+Landing is judged on the angle between the board and where you're going, folded
+into a quarter turn so riding away switch counts as clean. Within about 40° you
+ride away and bank the trick; past that the edge starts to catch and scrubs
+speed; past 70° you're down. Air time, each 180 of rotation (escalating), grab
+duration, the clean landing itself, near misses and hard powder turns all
+score, and each banked trick steps the multiplier. Crashing takes the
+multiplier but keeps the points already banked, which is the whole risk.
+
+## Sound
+
+There are no audio files. Everything is synthesised from one buffer of white
+noise and a few oscillators, which is a good fit for the subject: almost
+everything a snowboard makes *is* filtered noise. The edge is a bandpass whose
+centre frequency and gain ride the carve and the speed, dropped an octave and
+rolled off in powder; wind is the same noise smeared through a lowpass, rising
+with the square of speed. The impacts, the ollie pop and the rising chime as
+the combo climbs are short transients on top. The mute button is in the corner
+and persists.
+
+The one non-obvious constraint: the `AudioContext` is created inside the DROP
+IN click handler. iOS Safari will not start audio outside a real gesture, and a
+context created anywhere else stays suspended forever without an error to tell
+you so.
+
+## Tracks
+
+The board leaves a trench: a ribbon of quads written into a ring buffer, two
+vertices per sample at the board's edges, wrapping round and overwriting the
+oldest once it's full. Width and colour follow the carve — narrow and sharp on
+the corduroy, wide and soft off-piste.
+
+Rendering tracks into an orthographic texture over the terrain is what you'd
+reach for if the whole mountain had to remember them. It doesn't; the chase
+camera never sees more than about 150 m behind. The ring buffer needs one
+trick, though — the wrap point would otherwise draw a quad stretching from the
+newest position back to the oldest, a stripe right across the mountain.
+Degenerate quads at the seam solve it, and the same mechanism handles leaving
+the ground: the ribbon stops and restarts rather than bridging the gap.
 
 ## Phones
 
@@ -67,7 +119,10 @@ src/
     Game.js               world assembly, state machine, hazards
     ChaseCamera.js        third-person chase cam
     Input.js              keyboard
-    HUD.js                speed, timer, overlays
+    TouchControls.js      on-screen stick and buttons
+    Score.js              trick scoring and the combo multiplier
+    Quality.js            desktop/mobile tiers
+    HUD.js                score, speed, timer, overlays
     mathx.js              seeded RNG, damping, value noise
   world/
     Course.js             the height field everything else reads
@@ -81,6 +136,8 @@ src/
     Skiers.js             drifting NPC skiers
   fx/
     SnowSpray.js          carve plume particles
+    SnowTracks.js         the trench the board leaves behind
+    Audio.js              synthesised sound, no files
 tools/
   check-mechanics.mjs     headless smoke test for the ride model
 ```
@@ -192,8 +249,11 @@ ever on screen.
 `tools/check-mechanics.mjs` boots the game headless, takes over the frame loop
 so simulated time is independent of render speed, and asserts the properties
 that make the game playable: carve radius and turn rate, powder actually
-costing speed, every kicker on the course launching, and the run being
-completable in a sane time.
+costing speed, every kicker on the course launching, the run being completable
+in a sane time, a 360 fitting inside a typical air, landings being judged the
+way they should be, spinning not bending the flight path, the audio staying
+asleep until a real gesture, and the track ribbon wrapping its ring buffer
+without NaNs or vertices floating off the snow.
 
 ```bash
 npm run dev        # in one shell

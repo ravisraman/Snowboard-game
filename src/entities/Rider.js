@@ -112,6 +112,8 @@ export class Rider {
     this._modelPitch = 0;
     this._modelRoll = 0;
     this._crouch = 0;
+    this._weight = 0;
+    this._lastSpeed = this.speed;
 
     this.model.root.position.copy(this.position);
     this.model.root.rotation.set(0, this.yaw, 0);
@@ -478,36 +480,69 @@ export class Rider {
 
     m.tilt.rotation.set(this._modelPitch, 0, this._modelRoll);
 
-    // Crouch: low and coiled through hard carves, tucked for speed, absorbing
-    // on landing, extended in the air.
+    // Absorb and extend. A rider is never a fixed height: they compress into a
+    // carve, fold up on landing, and stand tall off a lip. `landedHard` decays
+    // over about a fifth of a second, which is exactly the absorb.
     let crouch = 0.22 * Math.abs(leanRatio);
     if (this.tucking) crouch += 0.3;
     if (this.braking) crouch += 0.18;
-    if (!this.grounded) crouch -= 0.12;
-    crouch += this.landedHard * 0.32;
-    this._crouch = damp(this._crouch, crouch, 12, dt);
+    crouch += this.landedHard * 0.42;
+    if (!this.grounded) {
+      // Extend off the lip, then tuck up as the rotation builds.
+      const spinTuck = clamp(this.spinDegrees / 360, 0, 1) * 0.16;
+      crouch += -0.14 + spinTuck + (this.grabbing ? 0.26 : 0);
+    }
+    this._crouch = damp(this._crouch, crouch, this.grounded ? 12 : 8, dt);
     m.body.position.y = -this._crouch;
     m.body.rotation.x = this._crouch * 0.55 + (this.tucking ? 0.28 : 0);
+
+    // Weight moves fore and aft with acceleration — driven back under power,
+    // forward over the nose when the snow is dragging you down.
+    const surge = clamp((this.speed - this._lastSpeed) / Math.max(dt, 1e-4) / 12, -1, 1);
+    this._lastSpeed = this.speed;
+    this._weight = damp(this._weight, surge, 5, dt);
+    m.body.position.z = this._weight * -0.06;
 
     // The upper body leans a little further into the arc than the board does,
     // and the shoulders counter-rotate — the shape that makes a carve read as
     // a carve rather than as a topple.
+    //
+    // Riding switch, the whole stance mirrors: shoulders the other way round,
+    // and the lead arm becomes the trailing one.
+    const facing = this.switchStance && this.grounded ? -1 : 1;
     m.body.rotation.z = -leanRatio * 0.16;
-    m.body.rotation.y = leanRatio * 0.3;
+    m.body.rotation.y = leanRatio * 0.3 * facing;
+
+    // Through a spin the body winds up and unwinds against the board, so the
+    // rotation looks driven rather than like the model being spun by a stick.
+    if (!this.grounded && this.spinDegrees > 20) {
+      const wind = clamp(this.spinDegrees / 220, 0, 1) * Math.sign(this.steer || 1);
+      m.body.rotation.y -= wind * 0.5;
+    }
 
     // Lead arm drops toward the snow through the turn; trailing arm counters.
-    const reach = leanRatio;
+    const reach = leanRatio * facing;
     m.armFront.rotation.z = -0.55 - reach * 0.95;
     m.armBack.rotation.z = 0.5 - reach * 0.85;
+
     if (!this.grounded) {
-      const t = this.airTime * 5;
-      m.armFront.rotation.z += Math.sin(t) * 0.22 - 0.35;
-      m.armBack.rotation.z += Math.cos(t) * 0.2 + 0.3;
+      if (this.grabbing) {
+        // Reaching down to the board: the arm goes across and the body folds
+        // over it. This is the pose the whole grab mechanic exists to show.
+        const grab = clamp(this.grabTime * 6, 0, 1);
+        m.armFront.rotation.z = damp(m.armFront.rotation.z, -1.85, 18, dt);
+        m.armBack.rotation.z = damp(m.armBack.rotation.z, 1.15, 14, dt);
+        m.body.rotation.x += grab * 0.34;
+      } else {
+        const t = this.airTime * 5;
+        m.armFront.rotation.z += Math.sin(t) * 0.22 - 0.35;
+        m.armBack.rotation.z += Math.cos(t) * 0.2 + 0.3;
+      }
     }
 
     // The board runs slightly across its own path in a carve.
     m.board.rotation.y = -leanRatio * 0.14;
-    m.head.rotation.y = leanRatio * 0.42 + 0.15;
+    m.head.rotation.y = leanRatio * 0.42 * facing + 0.15 * facing;
   }
 }
 

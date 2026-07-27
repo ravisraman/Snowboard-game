@@ -9,6 +9,7 @@ import { Rider, RIDER_TUNING } from '../entities/Rider.js';
 import { Skiers } from '../entities/Skiers.js';
 import { SnowSpray } from '../fx/SnowSpray.js';
 import { GameAudio } from '../fx/Audio.js';
+import { SnowTracks } from '../fx/SnowTracks.js';
 import { ChaseCamera } from './ChaseCamera.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
@@ -109,6 +110,9 @@ export class Game {
 
     this.spray = new SnowSpray(this.quality.maxParticles);
     this.scene.add(this.spray.points);
+
+    this.tracks = new SnowTracks(course, { segments: this.quality.trackSegments });
+    this.scene.add(this.tracks.mesh);
   }
 
   /* ================================================================
@@ -119,6 +123,7 @@ export class Game {
     this.rider.reset();
     this.skiers.reset();
     this.spray.reset();
+    this.tracks.reset();
     this.score.reset();
     this._grazed = new Set();
     this.chase.reset(this.rider);
@@ -166,6 +171,7 @@ export class Game {
     r.lean = 0;
     r.leanVel = 0;
     r.settle();
+    this.tracks.lift();
     this.chase.reset(r);
     this.stuckTimer = 0;
     this.hud.setStuck(false);
@@ -264,6 +270,7 @@ export class Game {
     this.touch.setAirborne(!this.rider.grounded && this.state === 'riding');
     this.skiers.update(sdt, this.rider.position.z);
     this.audio.update(this.rider, this.state === 'riding');
+    this.tracks.update(this.rider);
     this._emitSpray(sdt);
     this.spray.update(sdt);
     this.chase.update(this.rider, dt);
