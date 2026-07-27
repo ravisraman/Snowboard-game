@@ -13,17 +13,41 @@ npm run dev      # http://localhost:5173
 
 | Key | Touch | |
 | --- | --- | --- |
-| <kbd>A</kbd> / <kbd>D</kbd> | drag the left thumb | Carve onto the heel or toe edge |
-| <kbd>W</kbd> | hold TUCK | Tuck for speed |
-| <kbd>S</kbd> | hold BRAKE | Brake and slide |
-| <kbd>Space</kbd> | tap OLLIE | Ollie — or skate, when you're barely moving |
-| <kbd>E</kbd> | tap the prompt | Drop back onto the piste |
+| <kbd>A</kbd> / <kbd>D</kbd> | drag the left thumb | Carve onto the heel or toe edge — in the air, spin |
+| <kbd>W</kbd> | hold TUCK | Tuck for speed — in the air, nose grab |
+| <kbd>S</kbd> | hold BRAKE | Brake and slide — in the air, indy |
+| <kbd>Q</kbd> / <kbd>F</kbd> | — | Melon and method grabs |
+| <kbd>Shift</kbd> | hold BUTTER | Press the board, then steer to spin it on the snow |
+| <kbd>Space</kbd> | tap OLLIE | Ollie — time it at the lip for a bigger pop |
+| <kbd>Esc</kbd> / <kbd>H</kbd> | tap ? | Pause, and show the full control list |
+| <kbd>E</kbd> | tap the prompt | Drop back onto the piste, once you're bogged down |
 | <kbd>R</kbd> | tap the prompt | Restart the run, at any time |
 
-Arrow keys work too. In the air, carve left or right to spin and hold brake to
-grab. Your best score and best time are both kept in `localStorage`.
+Arrow keys work too, and the pause panel lists all of this in game so you never
+have to come back here. Your best score and best time are both kept in
+`localStorage`.
 
 ## Tricks and scoring
+
+There are four grabs, and the awkward ones pay more — that is the whole reason
+for having four. Brake and tuck do nothing in the air, so they become indy and
+nose, and <kbd>Q</kbd> and <kbd>F</kbd> add melon and method. Each has its own
+pose: which hand goes where and how far the body folds over the board is what
+tells them apart at chase-camera distance, since the points would otherwise be
+the only difference. The phone gets two of the four, on the two buttons that
+were already dead in the air.
+
+**Butters** put rotation on the snow. <kbd>Shift</kbd> presses the board onto
+one end and the steering swings it round underneath you, judged on release
+exactly like a landing — a half turn rides away switch. Pressed, there is
+almost no edge left to carve on, which is what lets the same stick spin the
+board without steering you off your line. Getting it wrong costs speed rather
+than the run: a crash out of a butter would make the move too expensive to ever
+practise.
+
+Beyond that: ollie in the last stretch of a ramp rather than coasting off it and
+you get a real **pop**, worth both height and points; a **shifty** is spun out
+and brought back before you land; a dead-straight touchdown is a **stomp**.
 
 Off a lip the board's heading comes apart from the direction you're travelling:
 you keep flying the way you were going, and the steering now spins the board
@@ -56,6 +80,37 @@ The one non-obvious constraint: the `AudioContext` is created inside the DROP
 IN click handler. iOS Safari will not start audio outside a real gesture, and a
 context created anywhere else stays suspended forever without an error to tell
 you so.
+
+## Looking like a mountain
+
+The scene renders through a small post chain: a multisampled target (this is
+hard-edged low-poly geometry against a flat sky, the worst case for aliasing and
+the case MSAA is best at), a high-threshold bloom so only the genuinely
+over-range highlights bleed rather than the whole white slope, and a gentle
+grade — a vignette to hold the eye where the rider is, and a cool lift in the
+shadows, which on snow is honest, since what lights a shadow out there is the
+sky.
+
+Both quality tiers run the chain, and that is not a detail. The sky is a raw
+shader that writes its own fragments, so it is tone mapped only by the output
+pass; skipping the chain on phones made them render a visibly different sky from
+desktops. What the phone skips is the bloom and the grade. Multisampling is
+close to free on a tile-based GPU anyway.
+
+The resort furniture — marker poles down both edges of the piste, netting on the
+outside of the bends, a chairlift with chairs moving on it, rocks out in the far
+field, cloud caught between the ranges — is what makes it read as a resort
+rather than a hill with snow on it. The poles also do gameplay work: the line
+where corduroy becomes powder is a shader gradient and hard to read at speed,
+and a row of poles turns it into something you can see coming.
+
+Out in the powder the snow carries wind ripples, bumped into the normal rather
+than painted on. Every trunk has a ring of contact shade baked into the slope's
+vertex colours, which stands in for ambient occlusion, the tree's own shadow and
+the drift that collects at its foot all at once — without it a tree reads as a
+sticker laid on top of the slope. And the trees sway, with displacement growing
+as the square of height so the trunk barely moves and the top does the
+travelling.
 
 ## Tracks
 
@@ -120,9 +175,10 @@ src/
     ChaseCamera.js        third-person chase cam
     Input.js              keyboard
     TouchControls.js      on-screen stick and buttons
+    Controls.js           every control and trick, in one table
     Score.js              trick scoring and the combo multiplier
     Quality.js            desktop/mobile tiers
-    HUD.js                score, speed, timer, overlays
+    HUD.js                score, speed, timer, tracker, overlays
     mathx.js              seeded RNG, damping, value noise
   world/
     Course.js             the height field everything else reads
@@ -130,16 +186,19 @@ src/
     Kickers.js            ramp meshes
     Trees.js              instanced snowy pines
     Village.js            chalets, church, finish gate
-    Environment.js        sky, mountain panorama, lighting
+    Resort.js             marker poles, netting, chairlift, rocks
+    Environment.js        sky, clouds, mountain panorama, lighting
   entities/
     Rider.js              snowboarder model + ride physics
     Skiers.js             drifting NPC skiers
   fx/
     SnowSpray.js          carve plume particles
     SnowTracks.js         the trench the board leaves behind
+    Postprocess.js        multisampling, bloom, grade
     Audio.js              synthesised sound, no files
 tools/
   check-mechanics.mjs     headless smoke test for the ride model
+  screenshots.mjs         desktop and phone captures
 ```
 
 ## How the ride model works
@@ -251,9 +310,14 @@ so simulated time is independent of render speed, and asserts the properties
 that make the game playable: carve radius and turn rate, powder actually
 costing speed, every kicker on the course launching, the run being completable
 in a sane time, a 360 fitting inside a typical air, landings being judged the
-way they should be, spinning not bending the flight path, the audio staying
-asleep until a real gesture, and the track ribbon wrapping its ring buffer
-without NaNs or vertices floating off the snow.
+way they should be, spinning not bending the flight path, a butter that stays on
+the snow and does not leak rotation into the next jump, no tree reaching over
+the groomed line, the audio staying asleep until a real gesture, a pause that
+actually stops the clock, and the track ribbon wrapping its ring buffer without
+NaNs or vertices floating off the snow.
+
+42 assertions at the time of writing, and they are worth keeping green: three of
+them exist because the thing they check had already broken once.
 
 ```bash
 npm run dev        # in one shell
