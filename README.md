@@ -128,11 +128,22 @@ deliberate — the rider is the one object the camera never looks away from.
 
 ## Hazards
 
-Trees end a run. Skiers do not: clattering into one costs you the speed, the
-line and the multiplier, and leaves you wobbling for a second, but a
-three-kilometre descent should not end because somebody wandered across the
-piste. The traffic also stays out of the middle — each skier works a lane off to
-one side, so there is always a corridor down the fall line — and the top of the
+**Only a tree hit square on ends a run.** Everything else costs you speed, your
+line and the multiplier, and leaves you wobbling for a second while you gather
+it back up.
+
+That covers clipping a skier, clipping a tree in passing, and washing out a
+landing — which was the single most common way a run used to end. Coming off a
+kicker at a hundred km/h with any rotation on, judging the exact moment the
+board comes back square is a lot to ask, and getting it wrong was instant death.
+
+Whether a tree is "square on" is decided by how far off the travel line the
+trunk sits, not by how deep the overlap got: at thirty metres a second you cross
+a whole collider between frames, so depth measures the frame rate more than it
+measures the hit.
+
+The traffic also stays out of the middle — each skier works a lane off to one
+side, so there is always a corridor down the fall line — and the top of the
 mountain is empty so the drop-in is yours.
 
 One thing deliberately *not* part of a stumble: a kick to the edge spring. The
@@ -164,6 +175,22 @@ the sun across a packed piste there is a broad sheen — which is also where the
 bloom finds something worth blooming. And it is made of ice crystals, so it
 glitters: the sparkle is keyed to the camera's own position, which is what turns
 a static speckle into a twinkle as you ride past it.
+
+Sun shafts are a radial blur of the highlights toward the sun's position on
+screen, which over snow under a low sun is indistinguishable from the real
+thing; a gentle S-curve about mid grey follows, because tone mapping alone
+leaves the picture correct and flat. Close to the camera the snow carries three
+octaves of micro-relief bumped into its normal — the slope's triangles are
+metres across, so without it the surface up close is geometrically perfect, and
+nothing in nature is.
+
+There is no screen-space ambient occlusion, and that is a decision. `GTAOPass`
+turned the panorama black: SSAO reads the depth buffer, this scene runs from
+half a metre to nine kilometres, and out at the far ranges there is no precision
+left, so every sample reads as occluded. The contact shading is baked into the
+terrain around everything standing on it instead — trees, rocks, lift towers,
+marker poles. That only works on the ground and only for things that exist at
+build time, and it is still the better trade.
 
 The board's base, its steel edge and the goggle lens reflect a probe of the sky
 rendered once at startup. A metal with nothing to be metallic *about* comes out
