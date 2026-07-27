@@ -14,9 +14,10 @@ npm run dev      # http://localhost:5173
 ## Running it
 
 ```bash
-npm run build    # -> dist/, a folder you can put on any static host
-npm run preview  # serves that folder at http://localhost:4173
-npm run bundle   # -> dist/alpine-carve.html, the whole game in one file
+npm run build          # -> dist/, a folder you can put on any static host
+npm run preview        # serves that folder at http://localhost:4173
+npm run bundle         # -> dist/alpine-carve.html, the whole game in one file
+npm run check:offline  # proves a deploy reaches somebody who has been here before
 ```
 
 The built folder is the primary artifact. It is deployed to GitHub Pages on
@@ -31,6 +32,33 @@ one visit it works offline and can be installed to a phone's home screen. And
 `npm run bundle` still folds everything into a single self-contained HTML file
 that does open by double-clicking, and rides along in the deployed folder so it
 can always be downloaded from the live site.
+
+### The service worker is network-first for HTML, and that is not a detail
+
+It was cache-first, and that broke the deployed site for exactly the people who
+had played it before.
+
+Vite gives every build content-hashed asset names, and `index.html` is the only
+file that knows them. Precache that and serve it from the cache and a returning
+visitor gets whichever build they saw first — pointing at a JS file the next
+deploy deleted. Best case they are stuck on an old build forever; worst case,
+once the browser's own HTTP cache lets go, the page comes up blank. It cannot
+self-heal, because a cache-first worker never fetches the HTML that would tell
+it it is stale.
+
+So HTML goes to the network first and falls back to the cache only when there
+isn't one, while hashed assets stay cache-first — a content hash means a URL
+can only ever return one body, which is the whole point of the hash. The cache
+name carries a version, and `activate` deletes every cache that is not it,
+which is what clears a bad cache off a machine that already has one. On top of
+that, `main.js` reloads once when a worker *replaces* an older one, so the page
+matches the build serving it.
+
+`npm run check:offline` is the failure, reproduced: load the site, let the
+worker cache the shell, rename the hashed asset and repoint `index.html` at it
+— which is exactly what a deploy does — and load again. It has to come up on
+the new asset with nothing 404ing. Run against the old worker, it fails on the
+404, which is the bug it exists to catch.
 
 | Key | Touch | |
 | --- | --- | --- |
@@ -417,6 +445,7 @@ src/
     Audio.js              synthesised sound, no files
 tools/
   check-mechanics.mjs     headless smoke test for the ride model
+  check-offline.mjs       does a deploy reach a returning visitor?
   screenshots.mjs         desktop and phone captures
   rider-shots.mjs         close-ups of the rider, pose by pose
 ```

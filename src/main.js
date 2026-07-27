@@ -89,11 +89,34 @@ if (import.meta.env?.DEV) {
 const hosted = !!document.querySelector('link[rel="manifest"]');
 
 if (import.meta.env?.PROD && hosted && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  // A worker that has just taken over from an older one is serving a build
+  // this page did not come from, so the page has to be fetched again to match
+  // it. Only on a *replacement*: the first install also fires this, and
+  // reloading then would be a pointless flash on a first visit. The flag stops
+  // any chance of a reload loop if the swap happens twice.
+  //
+  // `hadController` is read now, before registering: it is false on a first
+  // visit — when taking control is expected and a reload would just be a flash
+  // — and true only when a worker is being *replaced*, which is the case that
+  // matters. `reloading` is a second belt against a loop.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
     // Relative to the document, not to this module — a project page is served
     // from a subdirectory and the bundle lives in `assets/` beneath it.
-    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {
-      /* offline support is a bonus, never a requirement */
-    });
+    navigator.serviceWorker
+      .register('./sw.js', { scope: './' })
+      // Ask outright whether there is a newer worker, rather than waiting for
+      // the browser's own schedule to get round to it.
+      .then((reg) => reg.update())
+      .catch(() => {
+        /* offline support is a bonus, never a requirement */
+      });
   });
 }

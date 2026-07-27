@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host",
     "check": "node tools/check-mechanics.mjs",
+    "check:offline": "vite build && node tools/check-offline.mjs",
     "bundle": "vite build && node tools/build-singlefile.mjs"
   },
   "dependencies": {
