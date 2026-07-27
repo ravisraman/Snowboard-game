@@ -16,14 +16,18 @@ export const CONTROL_GROUPS = [
       { keys: ['A', 'D'], touch: 'Drag', label: 'Carve onto the heel or toe edge' },
       { keys: ['W'], touch: 'TUCK', label: 'Tuck for speed' },
       { keys: ['S'], touch: 'BRAKE', label: 'Brake and slide' },
-      { keys: ['Space'], touch: 'OLLIE', label: 'Ollie — pop off the kickers' },
+      { keys: ['Space'], touch: 'OLLIE', label: 'Ollie — time it at the lip for a bigger pop' },
+      { keys: ['Shift'], touch: 'BUTTER', label: 'Press the board — then steer to spin it on the snow' },
     ],
   },
   {
     title: 'In the air',
     rows: [
       { keys: ['A', 'D'], touch: 'Drag', label: 'Spin the board — let go once first to arm it' },
-      { keys: ['S'], touch: 'GRAB', label: 'Grab the board — let go before you land' },
+      { keys: ['S'], touch: 'INDY', label: 'Indy — the easy one' },
+      { keys: ['W'], touch: 'NOSE', label: 'Nose grab' },
+      { keys: ['Q'], label: 'Melon' },
+      { keys: ['F'], label: 'Method — worth the most, and the hardest to hold' },
     ],
   },
   {
@@ -43,8 +47,12 @@ export const CONTROL_GROUPS = [
 export const TRICK_GUIDE = [
   { name: 'Air', detail: 'Every second off the snow' },
   { name: 'Spin', detail: 'Each 180 pays more than the last — a 720 beats two 360s' },
-  { name: 'Grab', detail: 'By how long you hold it' },
+  { name: 'Grab', detail: 'By how long you hold it, and how awkward it is: method beats melon beats nose beats indy' },
+  { name: 'Shifty', detail: 'Spin out and bring it back before you land' },
+  { name: 'Pop', detail: 'Ollie in the last stretch of a ramp instead of coasting off it' },
+  { name: 'Butter', detail: 'A ground spin, for the empty stretches between kickers' },
   { name: 'Clean landing', detail: 'Straight or switch, both count — and only this banks the multiplier' },
+  { name: 'Stomped', detail: 'Dead straight on touchdown' },
   { name: 'Close one', detail: 'Threading a tree at speed' },
   { name: 'Powder turn', detail: 'A committed carve off the groomer' },
 ];

@@ -313,6 +313,7 @@ export class Game {
       this.rider.update(sdt, this.input);
       this.score.update(sdt, this.rider);
       if (this.rider.trickLanded) this.score.onTrickLanded(this.rider.trickLanded);
+      if (this.rider.groundTrick) this.score.onGroundTrick(this.rider.groundTrick);
       this._emitAudio();
       this._checkHazards();
       this._trackStuck(dt);
@@ -380,6 +381,10 @@ export class Game {
       // The award has already been scored by now, so the pitch reflects the
       // multiplier you just earned rather than the one you had.
       if (r.trickLanded.clean) this.audio.trick(this.score.combo);
+      else this.audio.fail();
+    }
+    if (r.groundTrick) {
+      if (r.groundTrick.clean) this.audio.trick(this.score.combo);
       else this.audio.fail();
     }
   }
@@ -461,5 +466,7 @@ const COASTING = {
   steer: 0,
   tuck: false,
   brake: false,
+  press: false,
+  grabType: null,
   jumpPressed: false,
 };

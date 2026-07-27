@@ -51,19 +51,27 @@ for (const c of cases) {
     const state = await page.evaluate((seconds) => {
       const g = window.game;
       const c2 = g.course;
-      const fake = { steer: 0, tuck: false, brake: false, jumpPressed: false, restartPressed: false, helpPressed: false, endFrame() {}, clear() {} };
+      const fake = { steer: 0, tuck: false, brake: false, press: false, grabType: null, jumpPressed: false, restartPressed: false, helpPressed: false, endFrame() {}, clear() {} };
       const realInput = g.input;
       g.input = fake;
       const realHits = g.skiers.hits.bind(g.skiers);
       g.skiers.hits = () => null;
+      let air = 0;
       for (let i = 0; i < seconds * 120; i++) {
         const rr = g.rider;
         const lookZ = rr.position.z + Math.max(14, rr.speed * 1.7);
         let d = Math.atan2(c2.centerX(lookZ) - rr.position.x, lookZ - rr.position.z) - rr.yaw;
         while (d > Math.PI) d -= 2 * Math.PI;
         while (d < -Math.PI) d += 2 * Math.PI;
-        fake.steer = rr.grounded ? (d > 0.025 ? 1 : d < -0.025 ? -1 : 0) : 0;
-        fake.tuck = fake.steer === 0;
+        // On the snow, follow the line. In the air, centre the stick for a beat
+        // to arm the spin and then throw a grabbed rotation, so the results
+        // screen has real tricks on it rather than a list of plain airs.
+        air = rr.grounded ? 0 : air + 1;
+        fake.steer = rr.grounded
+          ? (d > 0.025 ? 1 : d < -0.025 ? -1 : 0)
+          : (air > 12 && air < 78 ? 1 : 0);
+        fake.grabType = !rr.grounded && air > 12 && air < 62 ? 'method' : null;
+        fake.tuck = rr.grounded && fake.steer === 0;
         g.update(1 / 120);
         if (g.state !== 'riding') break;
       }
@@ -71,8 +79,22 @@ for (const c of cases) {
       g.skiers.hits = realHits;
       return { state: g.state, z: Math.round(g.rider.position.z), score: Math.round(g.score.total) };
     }, 45);
-    await page.waitForTimeout(2500);
-    await page.screenshot({ path: `${OUT}/${c.name}-riding.png` });
+    if (SHOT === 'results') {
+      // Put the rider down deliberately, so the results screen has a real run
+      // behind it rather than an empty one.
+      await page.evaluate(() => {
+        const g = window.game;
+        g._crash('You found a tree the hard way.');
+        // Drive the slow-motion beat by hand; waiting for it would take most of
+        // a minute at software-rendered frame rates.
+        for (let i = 0; i < 600 && g.state === 'crashing'; i++) g.update(1 / 60);
+      });
+      await page.waitForTimeout(7000);
+      await page.screenshot({ path: `${OUT}/${c.name}-results.png` });
+    } else {
+      await page.waitForTimeout(2500);
+      await page.screenshot({ path: `${OUT}/${c.name}-riding.png` });
+    }
     console.log(c.name, JSON.stringify(state));
   }
   console.log(c.name, 'errors:', errs);

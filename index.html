@@ -70,6 +70,7 @@
       </div>
       <div class="touch-actions">
         <div class="touch-modifiers">
+          <button id="touch-press" class="touch-btn touch-btn-sm" type="button">BUTTER</button>
           <button id="touch-tuck" class="touch-btn touch-btn-sm" type="button">TUCK</button>
           <button id="touch-brake" class="touch-btn touch-btn-sm" type="button">BRAKE</button>
         </div>
@@ -124,6 +125,7 @@
           <div><dt>Distance</dt><dd id="crash-dist">0 m</dd></div>
           <div><dt>Top speed</dt><dd id="crash-top">0 km/h</dd></div>
         </dl>
+        <ol id="crash-log" class="trick-log"></ol>
         <button id="btn-retry" class="cta">RIDE AGAIN</button>
         <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
       </section>
@@ -144,6 +146,7 @@
           <div><dt>Top speed</dt><dd id="finish-top">0 km/h</dd></div>
           <div><dt>Biggest air</dt><dd id="finish-air">0.0 s</dd></div>
         </dl>
+        <ol id="finish-log" class="trick-log"></ol>
         <button id="btn-again" class="cta">RIDE AGAIN</button>
         <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
       </section>

@@ -623,6 +623,8 @@ body.is-touch .touch { display: block; }
   background: rgba(255, 140, 60, 0.42);
 }
 
+.touch-btn.is-idle { opacity: 0.3; }
+
 .touch-btn.is-down {
   transform: scale(0.93);
   background: rgba(255, 255, 255, 0.42);
@@ -843,6 +845,32 @@ body.is-touch .touch { display: block; }
   font-weight: 300;
   font-variant-numeric: tabular-nums;
 }
+
+/* ======================== Trick log ========================== */
+
+.trick-log {
+  display: none;
+  list-style: none;
+  margin: 0 0 26px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  text-align: left;
+}
+
+.trick-log.on { display: block; }
+
+.trick-log li {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 4px 0;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.trick-log span { opacity: 0.75; }
+.trick-log b { font-variant-numeric: tabular-nums; color: var(--orange); }
 
 /* ========================== Loading ========================== */
 

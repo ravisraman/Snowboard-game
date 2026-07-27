@@ -168,7 +168,7 @@ const results = await page.evaluate(() => {
         airFrames = r.grounded ? 0 : airFrames + 1;
         const steerNow = r.grounded || airFrames < 12 ? 0 : steer;
 
-        r.update(dt, { ...NONE, steer: steerNow, brake: !r.grounded && grab });
+        r.update(dt, { ...NONE, steer: steerNow, grabType: !r.grounded && grab ? grab : null });
         if (wasGrounded && !r.grounded) { launched = true; travelAtLaunch = r.yaw; }
         if (launched && !r.grounded) {
           peakSpin = Math.max(peakSpin, r.spinDegrees);
@@ -182,8 +182,13 @@ const results = await page.evaluate(() => {
       return { peakSpin: +peakSpin.toFixed(0), drift: +drift.toFixed(3), landing };
     };
 
-    const spun = ride(1, false);
-    const grabbed = ride(0, true);
+    const spun = ride(1, null);
+    const grabbed = ride(0, 'indy');
+    // Every grab has to reach the landing intact and be named for what it was.
+    const grabNames = ['indy', 'melon', 'nose', 'method'].map((g) => {
+      const l = ride(0, g).landing;
+      return `${g}:${l?.grabType ?? 'none'}`;
+    });
 
     // Carrying an edge straight through the lip, never centring the stick:
     // this must not rotate the board at all.
@@ -207,6 +212,105 @@ const results = await page.evaluate(() => {
       travelDriftDegrees: spun.drift,
       grabSeconds: +(grabbed.landing?.grabTime ?? 0).toFixed(2),
       heldCarveSpin: +heldSpin.toFixed(1),
+      grabNames,
+    };
+  }
+
+  /* Popping at the lip has to be worth timing, and only at the lip. */
+  {
+    const ollieAt = (phaseWanted) => {
+      const k = c.kickers[3];
+      r.reset();
+      const z0 = k.z - 30;
+      const u = c.trackOffset(k.x, k.z);
+      const tan = c.trackTangent(z0);
+      r.position.set(c.centerX(z0) + u * tan.z, 0, z0 - u * tan.x);
+      r.yaw = c.trackHeading(z0);
+      r.speed = 24;
+      r.settle();
+
+      let popped = null;
+      let air = 0;
+      for (let i = 0; i < 900; i++) {
+        const phase = c.kickerPhase(r.position.x, r.position.z);
+        // Ollie the moment the ramp has been climbed as far as asked for.
+        const jump = popped === null && phase > 0 && phase >= phaseWanted;
+        r.update(dt, { ...NONE, jumpPressed: jump });
+        if (jump) popped = r.popped;
+        if (popped !== null && !r.grounded) air = Math.max(air, r.airTime);
+        if (popped !== null && r.grounded && air > 0) break;
+      }
+      return { popped, air: +air.toFixed(2) };
+    };
+    out.pop = { atLip: ollieAt(0.9), atFoot: ollieAt(0.05) };
+  }
+
+  /* Butters: a ground spin that leaves you riding switch. */
+  {
+    r.reset();
+    r.position.set(c.centerX(500), 0, 500);
+    r.yaw = c.trackHeading(500);
+    r.speed = 18;
+    r.settle();
+
+    let trick = null;
+    let leftGround = false;
+    // Press and hold a steer until the board has come round half a turn, then
+    // let it back down.
+    for (let i = 0; i < 900; i++) {
+      const done = r.pressDegrees > 175;
+      r.update(dt, { ...NONE, press: !done, steer: done ? 0 : 1 });
+      if (!r.grounded) leftGround = true;
+      if (r.groundTrick) { trick = r.groundTrick; break; }
+    }
+    out.butter = {
+      halfTurns: trick?.halfTurns ?? 0,
+      clean: !!trick?.clean,
+      switchStance: r.switchStance,
+      crashed: r.crashed,
+      leftGround,
+    };
+
+    // A butter must not leak into the air as free rotation: take off mid-press
+    // and the spin starts from zero again.
+    r.reset();
+    r.position.set(c.centerX(500), 0, 500);
+    r.yaw = c.trackHeading(500);
+    r.speed = 18;
+    r.settle();
+    for (let i = 0; i < 240; i++) r.update(dt, { ...NONE, press: true, steer: 1 });
+    const carried = r.pressDegrees;
+    r.grounded = false;
+    r.vy = 6;
+    r._beginAir();
+    out.butter.groundSpinCarried = +r.spinDegrees.toFixed(1);
+    out.butter.groundSpinBefore = +carried.toFixed(0);
+  }
+
+  /* A shifty is spun out and brought back — not a 180. */
+  {
+    r.reset();
+    r.position.set(c.centerX(620), 0, 620);
+    r.yaw = c.trackHeading(620);
+    r.speed = 22;
+    r.settle();
+    r.grounded = false;
+    r.vy = 8;
+    r._beginAir();
+    r.spinArmed = true;
+
+    let landing = null;
+    for (let i = 0; i < 900; i++) {
+      // Out for a beat, then all the way back.
+      const steer = r.spinPeak < 75 && r.spinDegrees >= 0 && i < 40 ? 1 : (r.spinDegrees > 4 ? -1 : 0);
+      r.update(dt, { ...NONE, steer });
+      if (r.trickLanded) { landing = r.trickLanded; break; }
+      if (r.trickFailed) break;
+    }
+    out.shifty = {
+      peak: +(landing ? 0 : 0),
+      shifty: !!landing?.shifty,
+      netDegrees: +(landing?.spinDegrees ?? -1).toFixed(0),
     };
   }
 
@@ -451,6 +555,23 @@ const checks = [
   ['spinning does not bend the flight path', results.spin.travelDriftDegrees < 0.01,
     `${results.spin.travelDriftDegrees} deg of travel drift`],
   ['grab registers while airborne', results.spin.grabSeconds > 0.3, `${results.spin.grabSeconds} s held`],
+  ['every grab arrives at the landing named',
+    results.spin.grabNames.every((s) => s.split(':')[0] === s.split(':')[1]),
+    results.spin.grabNames.join(' ')],
+  ['popping at the lip goes higher than coasting off it',
+    results.pop.atLip.popped === 1 && results.pop.atFoot.popped === 0 &&
+    results.pop.atLip.air > results.pop.atFoot.air,
+    `lip ${results.pop.atLip.air}s (pop ${results.pop.atLip.popped}) vs foot ${results.pop.atFoot.air}s (pop ${results.pop.atFoot.popped})`],
+  ['a butter 180 rides away switch, on the snow',
+    results.butter.halfTurns === 1 && results.butter.clean && results.butter.switchStance &&
+    !results.butter.crashed && !results.butter.leftGround,
+    `${results.butter.halfTurns * 180} deg, ${results.butter.clean ? 'clean' : 'scrappy'}, switch ${results.butter.switchStance}`],
+  ['a ground spin does not carry into the air',
+    results.butter.groundSpinBefore > 90 && results.butter.groundSpinCarried === 0,
+    `${results.butter.groundSpinBefore} deg on the snow -> ${results.butter.groundSpinCarried} deg at take-off`],
+  ['a shifty scores as a shifty, not as a rotation',
+    results.shifty.shifty && results.shifty.netDegrees < 30,
+    `net ${results.shifty.netDegrees} deg, shifty ${results.shifty.shifty}`],
   ['landing angle decides the outcome',
     results.landings[0] === 'clean' && results.landings[30] === 'clean' &&
     results.landings[50] === 'sketchy' && results.landings[90] === 'washed out' &&

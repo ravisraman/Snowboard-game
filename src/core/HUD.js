@@ -52,6 +52,8 @@ export class HUD {
       finishBestScore: $('finish-best-score'),
       finishTricks: $('finish-tricks'),
       crashScore: $('crash-score'),
+      finishLog: $('finish-log'),
+      crashLog: $('crash-log'),
       loading: $('loading'),
       start: $('btn-start'),
       retry: $('btn-retry'),
@@ -297,6 +299,19 @@ export class HUD {
     el.classList.add('pop');
   }
 
+  /**
+   * The run's best tricks. Half the point of a trick vocabulary is finding out
+   * afterwards what the game called the thing you just did.
+   */
+  _fillLog(el, score) {
+    if (!el) return;
+    const best = score?.bestTricks?.() ?? [];
+    el.innerHTML = best
+      .map((t) => `<li><span>${t.label.replace(/</g, '&lt;')}</span><b>${t.points.toLocaleString('en-US')}</b></li>`)
+      .join('');
+    el.classList.toggle('on', best.length > 0);
+  }
+
   showCrash(rider, elapsed, distance, score) {
     // A wipeout still banks whatever you had already landed — it is only the
     // multiplier you were building that dies with you.
@@ -307,6 +322,7 @@ export class HUD {
     this.el.crashTime.textContent = formatTime(elapsed);
     this.el.crashDist.textContent = `${Math.round(distance)} m`;
     this.el.crashTop.textContent = `${Math.round(rider.topSpeed * 3.6)} km/h`;
+    this._fillLog(this.el.crashLog, score);
     this.showScreen('crash');
   }
 
@@ -327,6 +343,7 @@ export class HUD {
     this.el.finishBest.style.color = isBestTime ? '#8ee6a0' : '';
     this.el.finishTop.textContent = `${Math.round(rider.topSpeed * 3.6)} km/h`;
     this.el.finishAir.textContent = `${rider.longestAir.toFixed(1)} s`;
+    this._fillLog(this.el.finishLog, score);
     this.showScreen('finish');
   }
 

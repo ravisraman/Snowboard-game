@@ -4,6 +4,10 @@
  * `steer` is raw -1/0/1 on purpose: all of the smoothing lives in the rider's
  * edge-angle spring, so the weight of a turn is a property of the board rather
  * than of the input layer.
+ *
+ * The grab keys are the one place this layer knows about tricks, and only
+ * enough to say *which* grab is being asked for — whether a grab is possible at
+ * all is the rider's business, not the keyboard's.
  */
 
 const KEYMAP = {
@@ -14,6 +18,9 @@ const KEYMAP = {
   Space: 'jump',
   KeyR: 'restart',
   KeyE: 'rescue',
+  KeyQ: 'melon',
+  KeyF: 'method',
+  ShiftLeft: 'press', ShiftRight: 'press',
   Escape: 'help', KeyH: 'help', Slash: 'help',
 };
 
@@ -31,7 +38,7 @@ export class Input {
      * waste to throw it away, and the edge-angle spring reads any value in
      * between perfectly happily.
      */
-    this.touch = { steer: 0, tuck: false, brake: false };
+    this.touch = { steer: 0, tuck: false, brake: false, press: false };
 
     this._onKeyDown = (e) => {
       const action = KEYMAP[e.code];
@@ -67,6 +74,21 @@ export class Input {
 
   get tuck() { return this.down.has('tuck') || this.touch.tuck; }
   get brake() { return this.down.has('brake') || this.touch.brake; }
+  get press() { return this.down.has('press') || this.touch.press; }
+
+  /**
+   * Which grab is being asked for, or null. Tuck and brake double up here —
+   * neither does anything airborne, so the two keys a rider already has under
+   * their fingers become two of the four grabs, and the phone gets both without
+   * growing a single new button.
+   */
+  get grabType() {
+    if (this.down.has('method')) return 'method';
+    if (this.down.has('melon')) return 'melon';
+    if (this.tuck) return 'nose';
+    if (this.brake) return 'indy';
+    return null;
+  }
 
   /** Call once per frame, after the world has read the edge-triggered flags. */
   endFrame() {
@@ -81,6 +103,7 @@ export class Input {
     this.touch.steer = 0;
     this.touch.tuck = false;
     this.touch.brake = false;
+    this.touch.press = false;
     this.jumpPressed = false;
     this.restartPressed = false;
     this.rescuePressed = false;

@@ -265,6 +265,26 @@ export class Course {
     return h;
   }
 
+  /**
+   * How far up a kicker ramp a position is, 0 at the foot and 1 at the lip;
+   * 0 when not on a ramp at all. This is what an ollie is timed against — the
+   * pop only pays if it happens in the last stretch before the lip.
+   */
+  kickerPhase(x, z) {
+    let best = 0;
+    const near = this.kickersNear(z);
+    for (const k of near) {
+      const dx = x - k.x;
+      const dz = z - k.z;
+      const s = dx * k.dirX + dz * k.dirZ;
+      if (s < 0 || s > k.length) continue;
+      const t = dx * k.dirZ - dz * k.dirX;
+      if (Math.abs(t) > k.halfWidth) continue;
+      best = Math.max(best, s / k.length);
+    }
+    return best;
+  }
+
   /** True when a position is on (or very near) a kicker ramp — used by scatter placement. */
   onKicker(x, z, pad = 3) {
     const near = this.kickersNear(z);

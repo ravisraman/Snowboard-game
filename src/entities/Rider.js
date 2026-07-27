@@ -43,6 +43,16 @@ const TUNING = {
   landCleanTol: 0.7,      // rad from forward-or-switch that still rides away
   landSketchyTol: 1.25,   // past this the edge catches and you go down
   landSketchyScrub: 0.72, // fraction of speed kept on a scrappy landing
+  landStompTol: 0.12,     // dead straight, and paid for as such
+
+  popPhase: 0.72,         // how far up the ramp an ollie has to be to count
+  popBoost: 0.55,         // extra ollie, as a fraction of the normal one
+
+  pressMinSpeed: 5,       // too slow to butter — the board just sits down
+  butterRate: 2.9,        // rad/s the board swings round while pressed
+  butterScrub: 2.6,       // m/s^2 bled off while riding on one end of the board
+  butterCatch: 0.9,       // rad off travel at which releasing costs you dearly
+  butterEdge: 0.12,       // how much edge is left to carve on while pressed
 
   scrub: 0.055,           // speed lost to carving hard
   brakeScrub: 7.5,
@@ -56,6 +66,21 @@ const TUNING = {
 };
 
 export const RIDER_TUNING = TUNING;
+
+/**
+ * The four grabs, as poses.
+ *
+ * `front`/`back` are the two arm angles, `fold` is how far the torso folds over
+ * the board, and `tweak` is the sideways bone — a method is mostly tweak, an
+ * indy is mostly fold. They differ enough to be told apart from behind, which
+ * is the only view the player ever has of them.
+ */
+const GRAB_POSES = {
+  indy:   { front: -1.85, back: 1.15, fold: 0.34, tweak: 0 },
+  melon:  { front: -1.2, back: 1.95, fold: 0.28, tweak: -0.3 },
+  nose:   { front: -2.25, back: 0.7, fold: 0.46, tweak: 0.12 },
+  method: { front: -1.05, back: 2.3, fold: 0.16, tweak: -0.62 },
+};
 
 export class Rider {
   constructor(course) {
@@ -103,10 +128,21 @@ export class Rider {
     this.spinDegrees = 0;
     this.switchStance = false;
     this.grabbing = false;
+    this.grabType = null;
     this.grabTime = 0;
+    this.spinPeak = 0;
+    this.popped = 0;
     this.trickLanded = null;
     this.trickFailed = false;
     this.spinArmed = false;
+
+    // Butters: riding on one end of the board with the other in the air.
+    this.pressing = false;
+    this.pressDir = 1;          // +1 nose, -1 tail
+    this.pressAmount = 0;       // eased, for the model
+    this.pressFrom = this.yaw;
+    this.pressDegrees = 0;
+    this.groundTrick = null;    // one-frame event, like trickLanded
 
     this._tumble = new THREE.Vector3();
     this._modelPitch = 0;
@@ -156,6 +192,11 @@ export class Rider {
 
     const c = this.course;
 
+    // Cleared up here rather than with the other per-frame flags below, because
+    // a butter is judged in section 2 — resetting it further down would wipe
+    // the event in the same frame it was raised.
+    this.groundTrick = null;
+
     this.powder = 1 - c.groomAt(this.position.x, this.position.z);
     this.tucking = input.tuck && this.grounded;
     this.braking = input.brake && this.grounded;
@@ -176,9 +217,25 @@ export class Rider {
     this.carveIntensity = clamp(Math.abs(this.lean) / TUNING.maxLean, 0, 1.2);
 
     if (this.grounded) {
+      // A butter is the ground version of a spin: weight onto one end, the
+      // other end light, and the board swings round underneath you while you
+      // keep travelling the way you were. Same `boardYaw` split as the air, and
+      // it needs speed for the same reason a carve does — at walking pace you
+      // are not buttering, you are standing on a board.
+      const wantsPress = input.press && this.speed > TUNING.pressMinSpeed;
+      if (wantsPress && !this.pressing) this._beginPress();
+      else if (!wantsPress && this.pressing) this._endPress();
+      this.pressing = wantsPress;
+      if (this.pressing) this.pressDir = input.brake ? -1 : 1;
+
       // Yaw rate = speed x curvature: a carve of fixed radius, exactly as a
       // real board's sidecut behaves. Turning gets quicker as you go faster.
-      this.yaw += curvature * this.speed * dt;
+      //
+      // Pressed, there is almost no edge left to carve on — one end of the
+      // board is in the air. That is what lets the same stick spin the board
+      // without also steering you off your line, and it is why a butter tracks
+      // more or less straight while the board comes round underneath you.
+      this.yaw += curvature * this.speed * dt * (this.pressing ? TUNING.butterEdge : 1);
 
       // Carving needs speed, so at a crawl the edge does nothing — which left
       // a rider who stopped facing across the hill unable to turn back down it.
@@ -187,11 +244,18 @@ export class Rider {
       const pivot = 1 - clamp(this.speed / TUNING.pivotSpeed, 0, 1);
       this.yaw += input.steer * TUNING.pivotRate * pivot * dt;
 
-      // On the snow the board lines up with travel — or 180 out of it, if you
-      // rode away switch. Settled rather than snapped, so a landing reads as a
-      // landing instead of a jump cut.
-      const settled = this.yaw + (this.switchStance ? Math.PI : 0);
-      this.boardYaw = damp(this.boardYaw, settled, TUNING.boardSettle, dt);
+      if (this.pressing) {
+        // Pressed, the board is free to swing. Nothing pulls it back to travel
+        // until you let go, which is what makes a ground 180 possible at all.
+        this.boardYaw += input.steer * TUNING.butterRate * dt;
+        this.pressDegrees = Math.abs(((this.boardYaw - this.pressFrom) * 180) / Math.PI);
+      } else {
+        // On the snow the board lines up with travel — or 180 out of it, if you
+        // rode away switch. Settled rather than snapped, so a landing reads as a
+        // landing instead of a jump cut.
+        const settled = this.yaw + (this.switchStance ? Math.PI : 0);
+        this.boardYaw = damp(this.boardYaw, settled, TUNING.boardSettle, dt);
+      }
     } else {
       // A spin has to be *asked for*. Carrying a carve into the lip is ordinary
       // riding, and if that held edge kept rotating the board in the air you
@@ -208,10 +272,20 @@ export class Rider {
       // Net rotation from take-off, not distance travelled — otherwise
       // wiggling the stick back and forth would bank as a 720.
       this.spinDegrees = Math.abs(((this.boardYaw - this.spinFrom) * 180) / Math.PI);
+      // The peak is what a shifty is judged on: spun out and brought back, so
+      // the net rotation at touchdown is nearly nothing but the move happened.
+      this.spinPeak = Math.max(this.spinPeak, this.spinDegrees);
 
-      // Brake has nothing to do in the air, so it doubles as the grab.
-      this.grabbing = !!input.brake;
-      if (this.grabbing) this.grabTime += dt;
+      // Neither brake nor tuck has anything to do in the air, so they become
+      // two of the four grabs. The type is whichever is held most recently;
+      // the timer runs across the whole air, so tweaking between grabs is not
+      // punished.
+      const requested = input.grabType;
+      this.grabbing = !!requested;
+      if (requested) {
+        this.grabType = requested;
+        this.grabTime += dt;
+      }
     }
 
     /* ---- 3. Longitudinal forces ----------------------------------- */
@@ -248,6 +322,10 @@ export class Rider {
 
       // Carving costs speed — the harder the arc, the more you scrub.
       accel -= TUNING.scrub * Math.abs(curvature) * this.speed * this.speed;
+
+      // Riding on one end of the board digs the other end in. Buttering has to
+      // cost something or it would simply be free style points.
+      if (this.pressing) accel -= TUNING.butterScrub;
     } else {
       // In the air only the thin drag of the wind applies.
       accel -= TUNING.dragBase * 0.35 * this.speed * this.speed;
@@ -264,6 +342,7 @@ export class Rider {
     this.justLaunched = false;
     this.justLanded = 0;
     this.skated = 0;
+    this.popped = 0;
     this.trickLanded = null;
     this.trickFailed = false;
 
@@ -274,10 +353,15 @@ export class Rider {
         this.speed = Math.min(TUNING.maxSpeed, this.speed + TUNING.skatePush);
         this.skated = 1;
       } else {
+        // Popping right at the lip is what a rider actually times, and it is
+        // worth real height. Anywhere else on the ramp is an ordinary ollie.
+        const phase = c.kickerPhase(this.position.x, this.position.z);
+        const popped = phase > TUNING.popPhase;
         this.grounded = false;
-        this.vy = Math.max(this.vy, 0) + TUNING.ollie;
+        this.vy = Math.max(this.vy, 0) + TUNING.ollie * (popped ? 1 + TUNING.popBoost : 1);
         this.justLaunched = true;
-        this._beginAir();
+        this.popped = popped ? 1 : 0;
+        this._beginAir(popped);
       }
     }
 
@@ -350,14 +434,60 @@ export class Rider {
   }
 
   /** Resets the per-air trick bookkeeping. Called however the rider left the snow. */
-  _beginAir() {
+  _beginAir(popped = false) {
     this.spinFrom = this.boardYaw;
     this.spinDegrees = 0;
+    this.spinPeak = 0;
     this.grabTime = 0;
     this.grabbing = false;
+    this.grabType = null;
+    this.airPopped = popped;
     // Armed only once the stick has been centred since take-off — see the
     // airborne branch of update() for why.
     this.spinArmed = false;
+    // A butter does not survive take-off: the board's rotation so far is
+    // already in `boardYaw`, and leaving the press open would let a ground spin
+    // keep winding for free in the air.
+    if (this.pressing) {
+      this._endPress();
+      this.pressing = false;
+    }
+  }
+
+  /* ---- Butters -------------------------------------------------- */
+
+  _beginPress() {
+    this.pressFrom = this.boardYaw;
+    this.pressDegrees = 0;
+  }
+
+  /**
+   * Letting the board back down. Whatever rotation it swung through is judged
+   * exactly like a landing — a half turn rides away switch — except that
+   * getting it wrong costs speed rather than the run. A crash out of a butter
+   * would make the whole move too expensive to ever practise.
+   */
+  _endPress() {
+    const a = Math.abs(angleDelta(this.yaw, this.boardYaw));
+    const align = Math.min(a, Math.PI - a);
+    const halfTurns = Math.round(this.pressDegrees / 180);
+
+    this.switchStance = a > Math.PI * 0.5;
+    const settled = this.yaw + (this.switchStance ? Math.PI : 0);
+    this.boardYaw = settled + angleDelta(settled, this.boardYaw);
+
+    // Sideways at the moment you let it down and the edge bites.
+    if (align > TUNING.butterCatch) this.speed *= 0.55;
+    else if (align > TUNING.landCleanTol) this.speed *= 0.85;
+
+    if (halfTurns > 0 && align < TUNING.butterCatch) {
+      this.groundTrick = {
+        halfTurns,
+        nose: this.pressDir > 0,
+        clean: align < TUNING.landCleanTol,
+      };
+    }
+    this.pressDegrees = 0;
   }
 
   /**
@@ -394,8 +524,14 @@ export class Rider {
 
     this.trickLanded = {
       clean,
+      stomped: clean && align < TUNING.landStompTol,
       spinDegrees: this.spinDegrees,
+      // Spun out and brought back: the net rotation is nothing, but the move
+      // happened and it is worth something.
+      shifty: this.spinPeak >= 60 && this.spinDegrees < 30,
       grabTime: this.grabTime,
+      grabType: this.grabType,
+      popped: !!this.airPopped,
       switchStance: this.switchStance,
       airTime: this.airTime,
     };
@@ -478,7 +614,12 @@ export class Rider {
     const targetRoll = clamp(Math.atan(crossSlope) * 0.55 - this.lean * 0.72, -0.8, 0.8);
     this._modelRoll = damp(this._modelRoll, targetRoll, 16, dt);
 
-    m.tilt.rotation.set(this._modelPitch, 0, this._modelRoll);
+    // A press tips the whole board on its end, so it goes on the pitch rather
+    // than into the body: nose down and tail in the air, or the reverse.
+    this.pressAmount = damp(this.pressAmount, this.pressing ? 1 : 0, 9, dt);
+    const pressPitch = this.pressAmount * this.pressDir * 0.34;
+
+    m.tilt.rotation.set(this._modelPitch + pressPitch, 0, this._modelRoll);
 
     // Absorb and extend. A rider is never a fixed height: they compress into a
     // carve, fold up on landing, and stand tall off a lip. `landedHard` decays
@@ -487,6 +628,9 @@ export class Rider {
     if (this.tucking) crouch += 0.3;
     if (this.braking) crouch += 0.18;
     crouch += this.landedHard * 0.42;
+    // Buttering, the weight is deliberately dumped over one end: knees bent
+    // low, arms out. Standing up straight through a press reads as a glitch.
+    crouch += this.pressAmount * 0.2;
     if (!this.grounded) {
       // Extend off the lip, then tuck up as the rotation builds.
       const spinTuck = clamp(this.spinDegrees / 360, 0, 1) * 0.16;
@@ -501,7 +645,7 @@ export class Rider {
     const surge = clamp((this.speed - this._lastSpeed) / Math.max(dt, 1e-4) / 12, -1, 1);
     this._lastSpeed = this.speed;
     this._weight = damp(this._weight, surge, 5, dt);
-    m.body.position.z = this._weight * -0.06;
+    m.body.position.z = this._weight * -0.06 + this.pressAmount * this.pressDir * 0.16;
 
     // The upper body leans a little further into the arc than the board does,
     // and the shoulders counter-rotate — the shape that makes a carve read as
@@ -527,12 +671,15 @@ export class Rider {
 
     if (!this.grounded) {
       if (this.grabbing) {
-        // Reaching down to the board: the arm goes across and the body folds
-        // over it. This is the pose the whole grab mechanic exists to show.
+        // Reaching down to the board. Which hand goes where, and how far the
+        // body folds over it, is what tells the four grabs apart at chase-camera
+        // distance — the points would otherwise be the only difference.
         const grab = clamp(this.grabTime * 6, 0, 1);
-        m.armFront.rotation.z = damp(m.armFront.rotation.z, -1.85, 18, dt);
-        m.armBack.rotation.z = damp(m.armBack.rotation.z, 1.15, 14, dt);
-        m.body.rotation.x += grab * 0.34;
+        const pose = GRAB_POSES[this.grabType] ?? GRAB_POSES.indy;
+        m.armFront.rotation.z = damp(m.armFront.rotation.z, pose.front, 18, dt);
+        m.armBack.rotation.z = damp(m.armBack.rotation.z, pose.back, 14, dt);
+        m.body.rotation.x += grab * pose.fold;
+        m.body.rotation.z += grab * pose.tweak;
       } else {
         const t = this.airTime * 5;
         m.armFront.rotation.z += Math.sin(t) * 0.22 - 0.35;
