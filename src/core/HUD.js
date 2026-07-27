@@ -28,6 +28,10 @@ export class HUD {
       speedFill: $('speed-fill'),
       timer: $('timer-value'),
       progress: $('progress-fill'),
+      trackerTicks: $('tracker-ticks'),
+      trackerRider: $('tracker-rider'),
+      trackerDone: $('tracker-done'),
+      trackerDistance: $('tracker-distance'),
       air: $('air-meter'),
       airValue: $('air-value'),
       powder: $('powder-tag'),
@@ -66,11 +70,35 @@ export class HUD {
 
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
-      score: -1, combo: -1, comboPct: -1, spin: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1,
     };
     this.best = this._load(BEST_TIME_KEY);
     this.bestScore = this._load(BEST_SCORE_KEY);
     this._buildHelp();
+  }
+
+  /**
+   * The run tracker: a rail with a tick for every kicker on the mountain.
+   *
+   * Built once, from the course itself, so it cannot disagree with what is
+   * actually out there. A bare percentage tells you how far you have come; the
+   * ticks are the part that tells you what is still coming, which is the thing
+   * you actually want to know at 100 km/h.
+   */
+  buildTracker(course) {
+    this.finishZ = course.finishZ;
+    const ticks = this.el.trackerTicks;
+    if (!ticks) return;
+    ticks.innerHTML = course.kickers
+      .map((k) => {
+        const pct = Math.min(100, (k.z / course.finishZ) * 100);
+        // Bigger kickers get a wider tick, so the rail carries a hint of what
+        // kind of jump is coming rather than just that one is.
+        const scale = (0.7 + (k.height - 1.5) / 3.4).toFixed(2);
+        return `<i style="top:${pct.toFixed(2)}%;transform:scaleX(${scale})"></i>`;
+      })
+      .join('');
+    this._ticks = [...ticks.children].map((el, i) => ({ el, z: course.kickers[i].z, passed: false }));
   }
 
   /**
@@ -235,6 +263,8 @@ export class HUD {
       this.el.progress.style.width = `${pct}%`;
     }
 
+    this._updateTracker(rider.position.z, progress);
+
     const airborne = !rider.grounded && rider.airTime > 0.22;
     if (airborne !== this._last.air) {
       this._last.air = airborne;
@@ -259,6 +289,31 @@ export class HUD {
     if (deep !== this._last.powder) {
       this._last.powder = deep;
       this.el.powder.classList.toggle('on', deep);
+    }
+  }
+
+  /** Moves the marker, and dims each kicker as it goes by. */
+  _updateTracker(z, progress) {
+    if (!this.el.trackerRider) return;
+
+    // Ten metres is finer than a pixel on the rail, and the whole discipline of
+    // this class is not touching the DOM for changes nobody can see.
+    const metres = Math.round(Math.max(0, z) / 10) * 10;
+    if (metres === this._last.metres) return;
+    this._last.metres = metres;
+
+    const pct = clamp(progress, 0, 1) * 100;
+    this.el.trackerRider.style.top = `${pct.toFixed(2)}%`;
+    this.el.trackerDone.style.height = `${pct.toFixed(2)}%`;
+    this.el.trackerDistance.textContent =
+      `${metres.toLocaleString('en-US')} / ${Math.round(this.finishZ ?? 0).toLocaleString('en-US')} m`;
+
+    for (const t of this._ticks ?? []) {
+      const passed = z > t.z;
+      if (passed !== t.passed) {
+        t.passed = passed;
+        t.el.classList.toggle('passed', passed);
+      }
     }
   }
 
@@ -352,7 +407,11 @@ export class HUD {
     this.el.trick?.classList.remove('pop');
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
-      score: -1, combo: -1, comboPct: -1, spin: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1,
     };
+    for (const t of this._ticks ?? []) {
+      t.passed = false;
+      t.el.classList.remove('passed');
+    }
   }
 }

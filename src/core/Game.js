@@ -114,6 +114,10 @@ export class Game {
 
     this.tracks = new SnowTracks(course, { segments: this.quality.trackSegments });
     this.scene.add(this.tracks.mesh);
+
+    // The tracker's ticks come from the course itself, so the rail cannot
+    // disagree with the kickers that are actually out there.
+    this.hud.buildTracker(course);
   }
 
   /* ================================================================

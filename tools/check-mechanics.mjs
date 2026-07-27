@@ -391,6 +391,10 @@ const results = await page.evaluate(() => {
     g.start();
 
     let airs = 0, wasAir = false, top = 0;
+    // The tracker marker has to march down the rail and never jump back.
+    const marker = document.getElementById('tracker-rider');
+    let lastTop = -1, trackerBacktracked = false, trackerSamples = 0;
+
     for (let i = 0; i < 120 * 300; i++) {
       const rr = g.rider;
       const lookZ = rr.position.z + Math.max(14, rr.speed * 1.7);
@@ -406,6 +410,12 @@ const results = await page.evaluate(() => {
         top = Math.max(top, rr.speed);
         if (!rr.grounded && !wasAir) airs++;
         wasAir = !rr.grounded;
+        if (i % 240 === 0) {
+          const t = parseFloat(marker?.style.top ?? '0') || 0;
+          if (t < lastTop - 0.01) trackerBacktracked = true;
+          lastTop = t;
+          trackerSamples++;
+        }
       }
       if (g.state !== 'riding') break;
     }
@@ -416,6 +426,15 @@ const results = await page.evaluate(() => {
       airs,
       crashReason: g.rider.crashReason ?? null,
       score: Math.round(g.score.total),
+      tricksLogged: g.score.log.length,
+    };
+
+    out.tracker = {
+      ticks: document.querySelectorAll('#tracker-ticks i').length,
+      kickers: c.kickers.length,
+      backtracked: trackerBacktracked,
+      samples: trackerSamples,
+      endedAt: lastTop,
     };
 
     // A crash keeps the points already banked but takes the streak.
@@ -594,6 +613,13 @@ const checks = [
   ['one-shots fire without throwing', audio.oneShots === 'ok', audio.oneShots],
   ['mute silences the master', audio.muted === 0, `master ${audio.muted}`],
   ['kickers get hit on the way down', results.run.airs >= 3, `${results.run.airs} airs`],
+  ['the tracker has a tick for every kicker',
+    results.tracker.ticks === results.tracker.kickers,
+    `${results.tracker.ticks} ticks for ${results.tracker.kickers} kickers`],
+  ['the tracker marker only ever goes down the hill',
+    !results.tracker.backtracked && results.tracker.samples > 10 && results.tracker.endedAt > 90,
+    `${results.tracker.samples} samples, ended at ${results.tracker.endedAt}%`],
+  ['a run keeps a trick log', results.run.tricksLogged > 0, `${results.run.tricksLogged} awards`],
   ['the controls panel opens from the title and closes back to it',
     ui.fromTitle === 'help' && ui.backToTitle === 'title', `${ui.fromTitle} -> ${ui.backToTitle}`],
   ['opening the controls mid-run pauses it', ui.pausedState === 'paused', ui.pausedState],
