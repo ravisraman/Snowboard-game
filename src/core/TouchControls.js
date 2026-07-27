@@ -34,6 +34,20 @@ export class TouchControls {
     this._bindButton('touch-jump', () => { this.input.jumpPressed = true; });
     this._bindHold('touch-tuck', (held) => { this.input.touch.tuck = held; });
     this._bindHold('touch-brake', (held) => { this.input.touch.brake = held; });
+
+    this.brakeBtn = document.getElementById('touch-brake');
+    this._airborne = null;
+  }
+
+  /**
+   * Brake has nothing to do in the air, so the same button is the grab. It
+   * relabels itself rather than adding a fifth control to a phone screen.
+   */
+  setAirborne(airborne) {
+    if (airborne === this._airborne || !this.brakeBtn) return;
+    this._airborne = airborne;
+    this.brakeBtn.textContent = airborne ? 'GRAB' : 'BRAKE';
+    this.brakeBtn.classList.toggle('is-grab', airborne);
   }
 
   /** Momentary: fires once on press. */

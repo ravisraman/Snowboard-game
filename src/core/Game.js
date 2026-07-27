@@ -11,6 +11,7 @@ import { SnowSpray } from '../fx/SnowSpray.js';
 import { ChaseCamera } from './ChaseCamera.js';
 import { Input } from './Input.js';
 import { HUD } from './HUD.js';
+import { Score } from './Score.js';
 import { TouchControls } from './TouchControls.js';
 import { clamp } from './mathx.js';
 
@@ -29,6 +30,10 @@ const CRASH_SLOWMO = 1.15;
 const STUCK_SPEED = 2.2;
 const STUCK_SECONDS = 2.5;
 
+/** How close to a tree, and how fast, counts as threading it. */
+const NEAR_MISS_MARGIN = 1.6;
+const NEAR_MISS_SPEED = 12;
+
 export class Game {
   constructor(renderer, quality = {}) {
     this.renderer = renderer;
@@ -43,6 +48,7 @@ export class Game {
     this.chase = new ChaseCamera(this.camera);
     this.input = new Input();
     this.hud = new HUD();
+    this.score = new Score();
     this.touch = new TouchControls(this.input);
 
     this._sprayPos = new THREE.Vector3();
@@ -109,6 +115,8 @@ export class Game {
     this.rider.reset();
     this.skiers.reset();
     this.spray.reset();
+    this.score.reset();
+    this._grazed = new Set();
     this.chase.reset(this.rider);
     this.elapsed = 0;
     this.crashTimer = 0;
@@ -117,7 +125,7 @@ export class Game {
     this._finishShown = false;
     this.hud.setStuck(false);
     this.hud.resetTicker();
-    this.hud.update(this.rider, 0, 0);
+    this.hud.update(this.rider, 0, 0, this.score);
   }
 
   start() {
@@ -162,6 +170,7 @@ export class Game {
     this.touch.setVisible(false);
     this.hud.setStuck(false);
     this.rider.crash(reason);
+    this.score.onCrash();
     this.state = 'crashing';
     this.crashTimer = 0;
     this.chase.kick(1.6);
@@ -214,7 +223,7 @@ export class Game {
       scale = 0.36;
       if (this.crashTimer > CRASH_SLOWMO) {
         this.state = 'crashed';
-        this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z);
+        this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z, this.score);
       }
     } else if (this.state === 'finished') {
       this.finishTimer += dt;
@@ -222,7 +231,7 @@ export class Game {
       // Let the rider coast past the banner for a beat before the results land.
       if (this.finishTimer > 1.6 && !this._finishShown) {
         this._finishShown = true;
-        this.hud.showFinish(this.rider, this.finishElapsed);
+        this.hud.showFinish(this.rider, this.finishElapsed, this.score);
       }
     }
 
@@ -231,6 +240,8 @@ export class Game {
     if (this.state === 'riding') {
       this.elapsed += dt;
       this.rider.update(sdt, this.input);
+      this.score.update(sdt, this.rider);
+      if (this.rider.trickLanded) this.score.onTrickLanded(this.rider.trickLanded);
       this._checkHazards();
       this._trackStuck(dt);
     } else if (this.state === 'finished') {
@@ -240,6 +251,7 @@ export class Game {
       this.rider.update(sdt, COASTING);
     }
 
+    this.touch.setAirborne(!this.rider.grounded && this.state === 'riding');
     this.skiers.update(sdt, this.rider.position.z);
     this._emitSpray(sdt);
     this.spray.update(sdt);
@@ -249,9 +261,10 @@ export class Game {
     this.lights.follow(this.rider.position);
 
     if (this.state === 'riding') {
-      this.hud.update(this.rider, this.elapsed, this.rider.position.z / COURSE.finishZ);
+      this.hud.update(this.rider, this.elapsed, this.rider.position.z / COURSE.finishZ, this.score);
     }
 
+    this.score.endFrame();
     this.input.endFrame();
   }
 
@@ -290,8 +303,8 @@ export class Game {
 
     r.sprayOrigin(this._sprayPos);
     const side = -Math.sign(r.lean || 1);
-    this.spray.emitCarve(this._sprayPos, r.yaw, side, r.speed, r.carveIntensity + (r.braking ? 0.9 : 0), r.powder, dt);
-    this.spray.emitTrail(this._sprayPos, r.yaw, r.speed, r.powder, dt);
+    this.spray.emitCarve(this._sprayPos, r.boardYaw, side, r.speed, r.carveIntensity + (r.braking ? 0.9 : 0), r.powder, dt);
+    this.spray.emitTrail(this._sprayPos, r.boardYaw, r.speed, r.powder, dt);
 
     if (r.justLanded > 4) {
       this.spray.burst(r.position, Math.round(18 + r.justLanded * 3), 1.6 + r.justLanded * 0.22, r.powder);
@@ -320,10 +333,19 @@ export class Game {
       for (const t of this.trees.query(z)) {
         const dx = t.x - x;
         const dz = t.z - z;
+        const d2 = dx * dx + dz * dz;
         const rr = t.r + RIDER_TUNING.riderRadius;
-        if (dx * dx + dz * dz < rr * rr) {
+        if (d2 < rr * rr) {
           this._crash('You found a tree the hard way.');
           return;
+        }
+        // Threading a gap at speed is the most fun thing you can do off-piste,
+        // so it should pay. Each tree can only do this once per run, or riding
+        // slowly past one would tick over and over.
+        const near = rr + NEAR_MISS_MARGIN;
+        if (d2 < near * near && r.speed > NEAR_MISS_SPEED && !this._grazed.has(t)) {
+          this._grazed.add(t);
+          this.score.onNearMiss();
         }
       }
     }

@@ -12,16 +12,28 @@
 
     <!-- ===================== HUD ===================== -->
     <div id="hud" class="hud" aria-hidden="true">
-      <div class="hud-speed">
-        <span id="speed-value">0</span><span class="hud-unit">km/h</span>
-        <div class="speed-bar"><div id="speed-fill"></div></div>
+      <div class="hud-left">
+        <div class="hud-score">
+          <span id="score-value">0</span>
+          <span id="combo" class="combo"><span id="combo-value">2</span></span>
+        </div>
+        <div class="combo-bar"><div id="combo-fill"></div></div>
+        <div class="hud-speed">
+          <span id="speed-value">0</span><span class="hud-unit">km/h</span>
+          <div class="speed-bar"><div id="speed-fill"></div></div>
+        </div>
       </div>
       <div class="hud-timer">
         <span id="timer-value">0:00.00</span>
         <div class="hud-progress"><div id="progress-fill"></div></div>
       </div>
+      <div id="trick-callout" class="trick-callout">
+        <span id="trick-label">360 GRAB</span>
+        <span id="trick-points">+320</span>
+      </div>
       <div id="air-meter" class="air-meter">
         <span class="air-label">AIR</span><span id="air-value">0.0s</span>
+        <span id="spin-value" class="spin-value">360°</span>
       </div>
       <div id="powder-tag" class="powder-tag">DEEP POWDER</div>
     </div>
@@ -63,17 +75,20 @@
       <!-- Title -->
       <section id="screen-title" class="screen">
         <h1 class="title">ALPINE<span>CARVE</span></h1>
-        <p class="tagline">Ride the groomer to the village. Don't hit anything.</p>
+        <p class="tagline">Spin, grab and carve your way to the village. Land it clean to build the multiplier.</p>
         <div class="controls keys-only">
           <div class="ctrl"><kbd>A</kbd><kbd>D</kbd><span>Carve heel / toe edge</span></div>
           <div class="ctrl"><kbd>W</kbd><span>Tuck for speed</span></div>
           <div class="ctrl"><kbd>S</kbd><span>Brake &amp; slide</span></div>
           <div class="ctrl"><kbd>Space</kbd><span>Ollie — pop off the kickers</span></div>
+          <div class="ctrl"><kbd>A</kbd><kbd>D</kbd><span>In the air: spin</span></div>
+          <div class="ctrl"><kbd>S</kbd><span>In the air: grab</span></div>
         </div>
         <div class="controls touch-only">
           <div class="ctrl"><span class="tkey">Drag</span><span>Left thumb carves the edge</span></div>
           <div class="ctrl"><span class="tkey">Ollie</span><span>Tap to pop off the kickers</span></div>
           <div class="ctrl"><span class="tkey">Tuck</span><span>Hold for speed</span></div>
+          <div class="ctrl"><span class="tkey">In the air</span><span>Drag to spin, hold GRAB for style</span></div>
         </div>
         <button id="btn-start" class="cta">DROP IN</button>
         <p class="hint">Stay on the corduroy — deep powder is fast to bog you down.</p>
@@ -84,6 +99,10 @@
       <section id="screen-crash" class="screen hidden">
         <h2 class="verdict">WIPEOUT</h2>
         <p id="crash-reason" class="sub">You caught an edge.</p>
+        <div class="hero-score">
+          <span id="crash-score">0</span>
+          <small>points</small>
+        </div>
         <dl class="stats">
           <div><dt>Time</dt><dd id="crash-time">0:00.00</dd></div>
           <div><dt>Distance</dt><dd id="crash-dist">0 m</dd></div>
@@ -97,9 +116,15 @@
       <section id="screen-finish" class="screen hidden">
         <h2 class="verdict finish">RUN COMPLETE</h2>
         <p class="sub">You made it to the village.</p>
+        <div class="hero-score">
+          <span id="finish-score">0</span>
+          <small>points</small>
+        </div>
         <dl class="stats">
+          <div><dt>Best score</dt><dd id="finish-best-score">—</dd></div>
+          <div><dt>Tricks</dt><dd id="finish-tricks">0</dd></div>
           <div><dt>Time</dt><dd id="finish-time">0:00.00</dd></div>
-          <div><dt>Best</dt><dd id="finish-best">—</dd></div>
+          <div><dt>Best time</dt><dd id="finish-best">—</dd></div>
           <div><dt>Top speed</dt><dd id="finish-top">0 km/h</dd></div>
           <div><dt>Biggest air</dt><dd id="finish-air">0.0 s</dd></div>
         </dl>

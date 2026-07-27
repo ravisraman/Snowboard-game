@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, damp, smoothstep } from '../core/mathx.js';
+import { clamp, damp, smoothstep, angleDelta } from '../core/mathx.js';
 
 /**
  * The snowboarder: model, and the carving physics that give the game its feel.
@@ -36,8 +36,13 @@ const TUNING = {
   leanStiffness: 36,      // spring toward the commanded edge
   leanDamping: 8.5,
   maxCurvature: 1 / 15.5, // tightest carve radius, in 1/metres
-  airSteer: 0.95,         // rad/s of yaw authority while airborne
   powderGrip: 0.55,       // edge authority retained in deep snow
+
+  spinRate: 5.2,          // rad/s the board rotates in the air (~1.2 s per 360)
+  boardSettle: 12,        // how fast the board lines back up after landing
+  landCleanTol: 0.7,      // rad from forward-or-switch that still rides away
+  landSketchyTol: 1.25,   // past this the edge catches and you go down
+  landSketchyScrub: 0.72, // fraction of speed kept on a scrappy landing
 
   scrub: 0.055,           // speed lost to carving hard
   brakeScrub: 7.5,
@@ -91,6 +96,18 @@ export class Rider {
     this.justLanded = 0;
     this.skated = 0;
 
+    // Where the board points, as opposed to where the rider is travelling.
+    // Locked together on the snow; free to rotate in the air.
+    this.boardYaw = this.yaw;
+    this.spinFrom = this.yaw;
+    this.spinDegrees = 0;
+    this.switchStance = false;
+    this.grabbing = false;
+    this.grabTime = 0;
+    this.trickLanded = null;
+    this.trickFailed = false;
+    this.spinArmed = false;
+
     this._tumble = new THREE.Vector3();
     this._modelPitch = 0;
     this._modelRoll = 0;
@@ -121,6 +138,8 @@ export class Rider {
     this.vy = this.speed * ((this.position.y - back) / 0.6);
     this.grounded = true;
     this.airTime = 0;
+    this.boardYaw = this.yaw;
+    this.switchStance = false;
   }
 
   get forwardX() { return Math.sin(this.yaw); }
@@ -165,8 +184,32 @@ export class Rider {
       // fades out as soon as there's enough speed to hold an edge.
       const pivot = 1 - clamp(this.speed / TUNING.pivotSpeed, 0, 1);
       this.yaw += input.steer * TUNING.pivotRate * pivot * dt;
+
+      // On the snow the board lines up with travel — or 180 out of it, if you
+      // rode away switch. Settled rather than snapped, so a landing reads as a
+      // landing instead of a jump cut.
+      const settled = this.yaw + (this.switchStance ? Math.PI : 0);
+      this.boardYaw = damp(this.boardYaw, settled, TUNING.boardSettle, dt);
     } else {
-      this.yaw += input.steer * TUNING.airSteer * dt;
+      // A spin has to be *asked for*. Carrying a carve into the lip is ordinary
+      // riding, and if that held edge kept rotating the board in the air you
+      // would be flung into an unasked-for 360 and wash out on landing — the
+      // game punishing you for turning. So the stick has to return to centre
+      // once after take-off before it counts as a spin command.
+      if (input.steer === 0) this.spinArmed = true;
+
+      // In the air only the *board* turns. Travel stays ballistic, which is the
+      // whole difference between a spin and a mid-air steer: you commit to your
+      // line off the lip, and what you do after that is style, not navigation.
+      if (this.spinArmed) this.boardYaw += input.steer * TUNING.spinRate * dt;
+
+      // Net rotation from take-off, not distance travelled — otherwise
+      // wiggling the stick back and forth would bank as a 720.
+      this.spinDegrees = Math.abs(((this.boardYaw - this.spinFrom) * 180) / Math.PI);
+
+      // Brake has nothing to do in the air, so it doubles as the grab.
+      this.grabbing = !!input.brake;
+      if (this.grabbing) this.grabTime += dt;
     }
 
     /* ---- 3. Longitudinal forces ----------------------------------- */
@@ -219,6 +262,8 @@ export class Rider {
     this.justLaunched = false;
     this.justLanded = 0;
     this.skated = 0;
+    this.trickLanded = null;
+    this.trickFailed = false;
 
     if (input.jumpPressed && this.grounded) {
       if (this.speed < TUNING.skateSpeed) {
@@ -230,6 +275,7 @@ export class Rider {
         this.grounded = false;
         this.vy = Math.max(this.vy, 0) + TUNING.ollie;
         this.justLaunched = true;
+        this._beginAir();
       }
     }
 
@@ -261,6 +307,7 @@ export class Rider {
         this.position.y += this.vy * dt;
         this.airTime = dt;
         this.justLaunched = this.vy > 1.2;
+        this._beginAir();
       } else {
         this.vy = surfaceRate;
         this.position.y = ground;
@@ -289,6 +336,7 @@ export class Rider {
         this.vy = this.speed * surfaceSlope;
         this.justLanded = perp;
         if (perp > TUNING.landHardImpact) this.landedHard = 1;
+        this._judgeLanding();
         this.airTime = 0;
       }
     }
@@ -299,16 +347,68 @@ export class Rider {
     this._animate(dt, slope, n);
   }
 
+  /** Resets the per-air trick bookkeeping. Called however the rider left the snow. */
+  _beginAir() {
+    this.spinFrom = this.boardYaw;
+    this.spinDegrees = 0;
+    this.grabTime = 0;
+    this.grabbing = false;
+    // Armed only once the stick has been centred since take-off — see the
+    // airborne branch of update() for why.
+    this.spinArmed = false;
+  }
+
+  /**
+   * Decides what the landing was worth.
+   *
+   * The only thing that matters is the angle between where the board points and
+   * where the rider is actually travelling — and both forward *and* switch (180
+   * out) are perfectly good ways to ride away, which is why the test folds the
+   * angle into a quarter turn before comparing.
+   */
+  _judgeLanding() {
+    const a = Math.abs(angleDelta(this.yaw, this.boardYaw));
+    const align = Math.min(a, Math.PI - a);
+    this.switchStance = a > Math.PI * 0.5;
+
+    // Re-base the board next to the travel direction. `boardYaw` free-runs so
+    // that a spin accumulates honestly, but left alone a rider who has just put
+    // down two full rotations would visibly unwind both of them as the board
+    // settles. This picks the congruent angle nearest the settle target, which
+    // is the same orientation on screen and a short move away.
+    const settled = this.yaw + (this.switchStance ? Math.PI : 0);
+    this.boardYaw = settled + angleDelta(settled, this.boardYaw);
+
+    if (align > TUNING.landSketchyTol) {
+      this.trickFailed = true;
+      this.crash('You landed sideways.');
+      return;
+    }
+
+    // Still holding the grab as you touch down is a scrappy landing, same as
+    // coming in crooked: you have no hands out and no time to absorb.
+    const clean = align < TUNING.landCleanTol && !this.grabbing;
+    if (!clean) this.speed *= TUNING.landSketchyScrub;
+
+    this.trickLanded = {
+      clean,
+      spinDegrees: this.spinDegrees,
+      grabTime: this.grabTime,
+      switchStance: this.switchStance,
+      airTime: this.airTime,
+    };
+  }
+
   /** Where the spray should come from: the outside edge of the board. */
   sprayOrigin(out) {
     const side = -Math.sign(this.lean || 1);
-    const rx = Math.cos(this.yaw);
-    const rz = -Math.sin(this.yaw);
+    const rx = Math.cos(this.boardYaw);
+    const rz = -Math.sin(this.boardYaw);
     const off = 0.17 + 0.1 * this.carveIntensity;
     out.set(
-      this.position.x + rx * side * off - Math.sin(this.yaw) * 0.35,
+      this.position.x + rx * side * off - Math.sin(this.boardYaw) * 0.35,
       this.position.y + 0.06,
-      this.position.z + rz * side * off - Math.cos(this.yaw) * 0.35
+      this.position.z + rz * side * off - Math.cos(this.boardYaw) * 0.35
     );
     return out;
   }
@@ -359,7 +459,7 @@ export class Rider {
     const leanRatio = clamp(this.lean / TUNING.maxLean, -1.3, 1.3);
 
     m.root.position.copy(this.position);
-    m.root.rotation.y = this.yaw;
+    m.root.rotation.y = this.boardYaw;
 
     // Pitch follows the fall line; in the air it eases toward level.
     const targetPitch = this.grounded ? -Math.atan(slope) : -0.1;

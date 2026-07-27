@@ -144,6 +144,94 @@ const results = await page.evaluate(() => {
     out.kickers = { count: airs.length, minAir: Math.min(...airs), maxAir: Math.max(...airs) };
   }
 
+  /* Spinning must rotate the board without bending the flight path. */
+  {
+    const k = c.kickers[0];
+    const ride = (steer, grab) => {
+      r.reset();
+      const z0 = k.z - 26;
+      const u = c.trackOffset(k.x, k.z);
+      const tan = c.trackTangent(z0);
+      r.position.set(c.centerX(z0) + u * tan.z, 0, z0 - u * tan.x);
+      r.yaw = c.trackHeading(z0);
+      r.speed = 24;
+      r.settle();
+
+      let launched = false, travelAtLaunch = 0, drift = 0, peakSpin = 0, landing = null;
+      let airFrames = 0;
+      for (let i = 0; i < 900; i++) {
+        const wasGrounded = r.grounded;
+
+        // A spin has to be asked for after take-off, so centre the stick for a
+        // beat first — exactly what a player does. Holding an edge through the
+        // lip deliberately does *not* spin you.
+        airFrames = r.grounded ? 0 : airFrames + 1;
+        const steerNow = r.grounded || airFrames < 12 ? 0 : steer;
+
+        r.update(dt, { ...NONE, steer: steerNow, brake: !r.grounded && grab });
+        if (wasGrounded && !r.grounded) { launched = true; travelAtLaunch = r.yaw; }
+        if (launched && !r.grounded) {
+          peakSpin = Math.max(peakSpin, r.spinDegrees);
+          drift = Math.max(drift, Math.abs(((r.yaw - travelAtLaunch) * 180) / Math.PI));
+        }
+        if (r.trickLanded || r.trickFailed) {
+          landing = r.trickFailed ? { failed: true } : r.trickLanded;
+          break;
+        }
+      }
+      return { peakSpin: +peakSpin.toFixed(0), drift: +drift.toFixed(3), landing };
+    };
+
+    const spun = ride(1, false);
+    const grabbed = ride(0, true);
+
+    // Carrying an edge straight through the lip, never centring the stick:
+    // this must not rotate the board at all.
+    r.reset();
+    const z1 = k.z - 26;
+    const u1 = c.trackOffset(k.x, k.z);
+    const tan1 = c.trackTangent(z1);
+    r.position.set(c.centerX(z1) + u1 * tan1.z, 0, z1 - u1 * tan1.x);
+    r.yaw = c.trackHeading(z1);
+    r.speed = 24;
+    r.settle();
+    let heldSpin = 0;
+    for (let i = 0; i < 900; i++) {
+      r.update(dt, { ...NONE, steer: 1 });
+      if (!r.grounded) heldSpin = Math.max(heldSpin, r.spinDegrees);
+      if (r.trickLanded || r.trickFailed) break;
+    }
+
+    out.spin = {
+      peakSpinDegrees: spun.peakSpin,
+      travelDriftDegrees: spun.drift,
+      grabSeconds: +(grabbed.landing?.grabTime ?? 0).toFixed(2),
+      heldCarveSpin: +heldSpin.toFixed(1),
+    };
+  }
+
+  /* Landing angle has to decide the outcome, forwards and switch alike. */
+  {
+    const landAt = (deg) => {
+      r.reset();
+      r.position.set(c.centerX(600), 0, 600);
+      r.yaw = c.trackHeading(600);
+      r.speed = 22;
+      r.settle();
+      r.grounded = false;
+      r.vy = 6;
+      r._beginAir();
+      for (let i = 0; i < 900; i++) {
+        r.boardYaw = r.yaw + (deg * Math.PI) / 180;   // hold the board off-axis
+        r.update(dt, NONE);
+        if (r.trickFailed) return 'washed out';
+        if (r.trickLanded) return r.trickLanded.clean ? 'clean' : 'sketchy';
+      }
+      return 'never landed';
+    };
+    out.landings = { 0: landAt(0), 30: landAt(30), 50: landAt(50), 90: landAt(90), 180: landAt(180) };
+  }
+
   /* And the whole run has to be completable without touching anything. */
   {
     for (const s of g.skiers.skiers) s.mesh.visible = false;
@@ -162,7 +250,9 @@ const results = await page.evaluate(() => {
       let d = Math.atan2(c.centerX(lookZ) - rr.position.x, lookZ - rr.position.z) - rr.yaw;
       while (d > Math.PI) d -= 2 * Math.PI;
       while (d < -Math.PI) d += 2 * Math.PI;
-      fake.steer = d > 0.025 ? 1 : d < -0.025 ? -1 : 0;
+      // Steering only on the snow: this run is checking that the course goes,
+      // not that the autopilot can spin.
+      fake.steer = rr.grounded ? (d > 0.025 ? 1 : d < -0.025 ? -1 : 0) : 0;
       fake.tuck = fake.steer === 0;
       g.update(1 / 120);
       if (g.state === 'riding') {
@@ -178,7 +268,14 @@ const results = await page.evaluate(() => {
       topSpeedKmh: +(top * 3.6).toFixed(0),
       airs,
       crashReason: g.rider.crashReason ?? null,
+      score: Math.round(g.score.total),
     };
+
+    // A crash keeps the points already banked but takes the streak.
+    g.score.combo = 5;
+    const bankedBeforeCrash = g.score.total;
+    g.score.onCrash();
+    out.combo = { afterCrash: g.score.combo, keptPoints: g.score.total === bankedBeforeCrash };
     g.skiers.hits = realHits;
     g.input = realInput;
   }
@@ -202,6 +299,22 @@ const checks = [
     `${results.unstick.uphillPivotDeg} deg in 4 s`],
   ['skate shoves you off from a standstill', results.skate.kmhFromStandstill > 8 && results.skate.stayedGrounded,
     `${results.skate.kmhFromStandstill} km/h`],
+  ['a 360 fits in a kicker air', results.spin.peakSpinDegrees >= 360,
+    `${results.spin.peakSpinDegrees} deg reached`],
+  ['a held carve through the lip does not spin you', results.spin.heldCarveSpin < 5,
+    `${results.spin.heldCarveSpin} deg from an uninterrupted hold`],
+  ['spinning does not bend the flight path', results.spin.travelDriftDegrees < 0.01,
+    `${results.spin.travelDriftDegrees} deg of travel drift`],
+  ['grab registers while airborne', results.spin.grabSeconds > 0.3, `${results.spin.grabSeconds} s held`],
+  ['landing angle decides the outcome',
+    results.landings[0] === 'clean' && results.landings[30] === 'clean' &&
+    results.landings[50] === 'sketchy' && results.landings[90] === 'washed out' &&
+    results.landings[180] === 'clean',
+    Object.entries(results.landings).map(([d, v]) => `${d}:${v}`).join(' ')],
+  ['a run accrues score', results.run.score > 0, `${results.run.score} points`],
+  ['a crash clears the combo but banks the points',
+    results.combo.afterCrash === 1 && results.combo.keptPoints,
+    `combo -> ${results.combo.afterCrash}`],
   ['every kicker launches', results.kickers.minAir > 0.4, `min air ${results.kickers.minAir}s over ${results.kickers.count} kickers`],
   ['run is completable', results.run.finished,
     results.run.finished ? `reached the finish in ${results.run.seconds} s` : (results.run.crashReason ?? 'never reached the finish')],

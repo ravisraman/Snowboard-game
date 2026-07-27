@@ -62,22 +62,76 @@ kbd {
 
 .hud.visible { opacity: 1; }
 
-.hud-speed {
+/* The run is scored, not raced, so the score takes the primary slot and the
+   speed and clock become supporting readouts under and beside it. */
+.hud-left {
   position: absolute;
-  left: 34px;
-  bottom: 30px;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
+  left: max(30px, env(safe-area-inset-left));
+  top: max(24px, env(safe-area-inset-top));
   width: 210px;
 }
 
-#speed-value {
-  font-size: 58px;
+.hud-score {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+#score-value {
+  font-size: 56px;
   font-weight: 200;
   line-height: 0.9;
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.combo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--orange);
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.combo::before { content: '×'; }
+.combo.on { opacity: 1; transform: none; }
+
+.combo-bar {
+  width: 100%;
+  height: 2px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.combo-bar.on { opacity: 1; }
+
+#combo-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--orange);
+  transition: width 0.1s linear;
+}
+
+.hud-speed {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 16px;
+}
+
+#speed-value {
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 0.9;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -153,6 +207,82 @@ kbd {
 .air-meter.on { opacity: 1; transform: translate(-50%, 0); }
 .air-label { font-size: 13px; font-weight: 700; letter-spacing: 0.3em; opacity: 0.75; }
 #air-value { font-size: 34px; font-weight: 200; }
+
+/* Live rotation while you're still in the air — the number you're deciding
+   whether to hold for. */
+.spin-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--orange);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.spin-value.on { opacity: 1; }
+
+/* The award for a landed trick, thrown up where the eye already is. */
+.trick-callout {
+  position: absolute;
+  left: 50%;
+  top: 27%;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, 0) scale(0.94);
+}
+
+.trick-callout.pop {
+  animation: trickpop 1.15s cubic-bezier(0.15, 0.9, 0.3, 1) both;
+}
+
+@keyframes trickpop {
+  0% { opacity: 0; transform: translate(-50%, 10px) scale(0.9); }
+  14% { opacity: 1; transform: translate(-50%, 0) scale(1.04); }
+  26% { transform: translate(-50%, 0) scale(1); }
+  72% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -22px) scale(1); }
+}
+
+#trick-label {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+#trick-points {
+  font-size: 30px;
+  font-weight: 300;
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The headline number on the results screens. */
+.hero-score {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 26px;
+}
+
+.hero-score span {
+  font-size: clamp(46px, 11vw, 76px);
+  font-weight: 200;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-score small {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  opacity: 0.5;
+}
 
 .powder-tag {
   position: absolute;
@@ -413,6 +543,11 @@ body.is-touch .touch { display: block; }
   font-size: 10.5px;
 }
 
+.touch-btn.is-grab {
+  border-color: rgba(255, 200, 120, 0.85);
+  background: rgba(255, 140, 60, 0.42);
+}
+
 .touch-btn.is-down {
   transform: scale(0.93);
   background: rgba(255, 255, 255, 0.42);
@@ -577,21 +712,32 @@ body.is-touch .touch { display: block; }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
 @media (max-width: 560px) {
-  #speed-value { font-size: 42px; }
+  #score-value { font-size: 40px; }
+  #speed-value { font-size: 22px; }
   #timer-value { font-size: 23px; }
 }
 
-/* On a touch device the bottom corners belong to your thumbs, so the readouts
-   move up out of the way rather than sitting under the steering pad. */
-body.is-touch .hud-speed {
-  top: max(18px, env(safe-area-inset-top));
-  bottom: auto;
-  left: max(20px, env(safe-area-inset-left));
+@media (max-height: 430px) {
+  .hud-left { width: 140px; }
+  #score-value { font-size: 34px; }
+  .trick-callout { top: 20%; }
+  #trick-points { font-size: 24px; }
+  #trick-label { font-size: 16px; }
+}
+
+/* On a touch device the bottom corners belong to your thumbs. The left stack
+   already lives at the top, so it only needs to be tightened up. */
+body.is-touch .hud-left {
+  top: max(14px, env(safe-area-inset-top));
+  left: max(18px, env(safe-area-inset-left));
   width: 150px;
 }
 
-body.is-touch #speed-value { font-size: 38px; }
-body.is-touch .speed-bar { margin-top: 8px; }
+body.is-touch #score-value { font-size: 40px; }
+body.is-touch .combo { font-size: 17px; }
+body.is-touch #speed-value { font-size: 22px; }
+body.is-touch .hud-speed { margin-top: 10px; }
+body.is-touch .speed-bar { margin-top: 6px; }
 
 body.is-touch .hud-timer {
   top: max(18px, env(safe-area-inset-top));

@@ -5,7 +5,8 @@ import { clamp, formatTime } from './mathx.js';
  * writes text, and only touches the DOM when a value has actually changed.
  */
 
-const BEST_KEY = 'alpine-carve.best';
+const BEST_TIME_KEY = 'alpine-carve.best';
+const BEST_SCORE_KEY = 'alpine-carve.bestScore';
 
 export class HUD {
   constructor() {
@@ -13,6 +14,15 @@ export class HUD {
 
     this.el = {
       hud: $('hud'),
+      score: $('score-value'),
+      combo: $('combo'),
+      comboValue: $('combo-value'),
+      comboBar: document.querySelector('.combo-bar'),
+      comboFill: $('combo-fill'),
+      trick: $('trick-callout'),
+      trickLabel: $('trick-label'),
+      trickPoints: $('trick-points'),
+      spin: $('spin-value'),
       speed: $('speed-value'),
       speedFill: $('speed-fill'),
       timer: $('timer-value'),
@@ -32,6 +42,10 @@ export class HUD {
       finishBest: $('finish-best'),
       finishTop: $('finish-top'),
       finishAir: $('finish-air'),
+      finishScore: $('finish-score'),
+      finishBestScore: $('finish-best-score'),
+      finishTricks: $('finish-tricks'),
+      crashScore: $('crash-score'),
       loading: $('loading'),
       start: $('btn-start'),
       retry: $('btn-retry'),
@@ -41,28 +55,45 @@ export class HUD {
       restartRun: $('btn-restart-run'),
     };
 
-    this._last = { speed: -1, timer: '', air: false, powder: false, progress: -1 };
-    this.best = this._loadBest();
+    this._last = {
+      speed: -1, timer: '', air: false, powder: false, progress: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1,
+    };
+    this.best = this._load(BEST_TIME_KEY);
+    this.bestScore = this._load(BEST_SCORE_KEY);
   }
 
-  _loadBest() {
+  _load(key) {
     try {
-      const raw = localStorage.getItem(BEST_KEY);
+      const raw = localStorage.getItem(key);
       return raw ? parseFloat(raw) : null;
     } catch {
       return null; // private browsing, embedded frames, etc.
     }
   }
 
+  _save(key, value) {
+    try {
+      localStorage.setItem(key, String(value));
+    } catch {
+      /* nothing we can do, and nothing worth interrupting the run for */
+    }
+  }
+
   recordTime(seconds) {
     if (this.best === null || seconds < this.best) {
       this.best = seconds;
-      try {
-        localStorage.setItem(BEST_KEY, String(seconds));
-      } catch {
-        /* nothing we can do, and nothing worth interrupting the run for */
-      }
+      this._save(BEST_TIME_KEY, seconds);
     }
+  }
+
+  recordScore(points) {
+    if (this.bestScore === null || points > this.bestScore) {
+      this.bestScore = points;
+      this._save(BEST_SCORE_KEY, points);
+      return true;
+    }
+    return false;
   }
 
   onAction({ onStart, onRestart, onRescue }) {
@@ -104,7 +135,9 @@ export class HUD {
     this.el.hud.classList.toggle('visible', visible);
   }
 
-  update(rider, elapsed, progress) {
+  update(rider, elapsed, progress, score) {
+    if (score) this._updateScore(score, rider);
+
     const kmh = Math.round(rider.speed * 3.6);
     if (kmh !== this._last.speed) {
       this._last.speed = kmh;
@@ -129,7 +162,20 @@ export class HUD {
       this._last.air = airborne;
       this.el.air.classList.toggle('on', airborne);
     }
-    if (airborne) this.el.airValue.textContent = `${rider.airTime.toFixed(1)}s`;
+    if (airborne) {
+      this.el.airValue.textContent = `${rider.airTime.toFixed(1)}s`;
+
+      // Live rotation: this is the number you're deciding whether to hold for.
+      const spin = Math.round(rider.spinDegrees / 10) * 10;
+      if (spin !== this._last.spin) {
+        this._last.spin = spin;
+        this.el.spin.textContent = `${spin}°`;
+        this.el.spin.classList.toggle('on', spin >= 90);
+      }
+    } else if (this._last.spin !== -1) {
+      this._last.spin = -1;
+      this.el.spin.classList.remove('on');
+    }
 
     const deep = rider.powder > 0.55 && rider.grounded;
     if (deep !== this._last.powder) {
@@ -138,7 +184,49 @@ export class HUD {
     }
   }
 
-  showCrash(rider, elapsed, distance) {
+  _updateScore(score, rider) {
+    const total = Math.round(score.total);
+    if (total !== this._last.score) {
+      this._last.score = total;
+      this.el.score.textContent = total.toLocaleString('en-US');
+    }
+
+    // The multiplier only appears once it is worth something, so the corner
+    // stays quiet on an ordinary cruise.
+    const combo = score.combo;
+    if (combo !== this._last.combo) {
+      this._last.combo = combo;
+      const live = combo > 1;
+      this.el.comboValue.textContent = combo;
+      this.el.combo.classList.toggle('on', live);
+      this.el.comboBar.classList.toggle('on', live);
+    }
+
+    const pct = Math.round(score.comboFraction * 100);
+    if (pct !== this._last.comboPct) {
+      this._last.comboPct = pct;
+      this.el.comboFill.style.width = `${pct}%`;
+    }
+
+    if (score.lastAward) this._popTrick(score.lastAward);
+  }
+
+  /** Throws the award up on screen. Retriggering restarts the animation. */
+  _popTrick({ label, points }) {
+    const el = this.el.trick;
+    this.el.trickLabel.textContent = label;
+    this.el.trickPoints.textContent = `+${points.toLocaleString('en-US')}`;
+    el.classList.remove('pop');
+    void el.offsetWidth; // reflow, or the class re-add is coalesced away
+    el.classList.add('pop');
+  }
+
+  showCrash(rider, elapsed, distance, score) {
+    // A wipeout still banks whatever you had already landed — it is only the
+    // multiplier you were building that dies with you.
+    const total = Math.round(score?.total ?? 0);
+    this.recordScore(total);
+    this.el.crashScore.textContent = total.toLocaleString('en-US');
     this.el.crashReason.textContent = rider.crashReason ?? 'You caught an edge.';
     this.el.crashTime.textContent = formatTime(elapsed);
     this.el.crashDist.textContent = `${Math.round(distance)} m`;
@@ -146,12 +234,21 @@ export class HUD {
     this.showScreen('crash');
   }
 
-  showFinish(rider, elapsed) {
-    const isBest = this.best === null || elapsed < this.best;
+  showFinish(rider, elapsed, score) {
+    const total = Math.round(score?.total ?? 0);
+    const isBestTime = this.best === null || elapsed < this.best;
+    const isBestScore = this.recordScore(total);
     this.recordTime(elapsed);
+
+    this.el.finishScore.textContent = total.toLocaleString('en-US');
+    this.el.finishBestScore.textContent =
+      this.bestScore === null ? '—' : Math.round(this.bestScore).toLocaleString('en-US');
+    this.el.finishBestScore.style.color = isBestScore ? '#8ee6a0' : '';
+    this.el.finishTricks.textContent = score?.tricksLanded ?? 0;
+
     this.el.finishTime.textContent = formatTime(elapsed);
     this.el.finishBest.textContent = this.best === null ? '—' : formatTime(this.best);
-    this.el.finishBest.style.color = isBest ? '#8ee6a0' : '';
+    this.el.finishBest.style.color = isBestTime ? '#8ee6a0' : '';
     this.el.finishTop.textContent = `${Math.round(rider.topSpeed * 3.6)} km/h`;
     this.el.finishAir.textContent = `${rider.longestAir.toFixed(1)} s`;
     this.showScreen('finish');
@@ -159,6 +256,10 @@ export class HUD {
 
   resetTicker() {
     this._stuckShown = undefined;
-    this._last = { speed: -1, timer: '', air: false, powder: false, progress: -1 };
+    this.el.trick?.classList.remove('pop');
+    this._last = {
+      speed: -1, timer: '', air: false, powder: false, progress: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1,
+    };
   }
 }
