@@ -1,6 +1,10 @@
 import { clamp, formatTime } from './mathx.js';
 import { CONTROL_GROUPS, TRICK_GUIDE, SCORING_NOTE } from './Controls.js';
 import { presetInfo } from './Difficulty.js';
+// The run list. A stub until `src/world/Runs.js` lands — see the header of
+// `Runs.stub.js`; swapping to the real presets is one import there and
+// nothing at all here.
+import { RUNS, runInfo } from './Runs.stub.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and
@@ -74,6 +78,10 @@ export class HUD {
       mute: $('btn-mute'),
       diffButtons: [...document.querySelectorAll('.diff-btn')],
       diffBlurb: $('difficulty-blurb'),
+      runPicker: $('run-picker'),
+      runButtons: [],
+      finishRun: $('finish-run'),
+      crashRun: $('crash-run'),
       nameInput: $('name-input'),
       titleBoard: $('title-board'),
       finishBoard: $('finish-board'),
@@ -89,6 +97,68 @@ export class HUD {
     this.best = this._load(BEST_TIME_KEY);
     this.bestScore = this._load(BEST_SCORE_KEY);
     this._buildHelp();
+    this._buildRuns();
+  }
+
+  /**
+   * The course picker, written from the run list.
+   *
+   * Built here rather than sitting in `index.html` for the same reason the
+   * controls panel is: there is one list of runs, and a card that could
+   * disagree with it is a card that eventually will. Adding a fourth run is
+   * then a change to the run presets and nothing else.
+   */
+  _buildRuns() {
+    const picker = this.el.runPicker;
+    if (!picker) return;
+
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+    picker.innerHTML = RUNS.map((run) => {
+      // The hint word says it, the dots say it again without words. A child
+      // who cannot yet read "GENTLE" can still count to one.
+      const dots = [1, 2, 3]
+        .map((n) => `<i class="${n <= run.grade ? 'lit' : ''}"></i>`)
+        .join('');
+      const features = run.features
+        .map((f) => `<span>${esc(f)}</span>`)
+        .join('');
+      return `<button class="run-card" type="button" data-run="${esc(run.id)}" data-grade="${run.grade}" aria-pressed="false">
+          <span class="run-head">
+            <span class="run-hint">${esc(run.hint)}</span>
+            <span class="run-dots" aria-hidden="true">${dots}</span>
+          </span>
+          <span class="run-name">${esc(run.name)}</span>
+          <span class="run-desc">${esc(run.description)}</span>
+          ${features ? `<span class="run-features">${features}</span>` : ''}
+        </button>`;
+    }).join('');
+
+    this.el.runButtons = [...picker.querySelectorAll('.run-card')];
+  }
+
+  /**
+   * Arrow keys walk a row of choices; Enter and Space are the button's own.
+   *
+   * Tab already reaches every one of these, so this is not what makes the
+   * picker usable without a mouse — it is what makes it usable without
+   * *thinking*. A seven-year-old on a keyboard reaches for the arrows, and a
+   * picker that only answers to Tab reads as broken. Focus moves without
+   * choosing, which is what the on-screen hint promises: look, then pick.
+   */
+  _pickerKeys(buttons) {
+    const focus = (i) => buttons[(i + buttons.length) % buttons.length]?.focus({ preventScroll: true });
+    buttons.forEach((btn, i) => {
+      btn.addEventListener('keydown', (e) => {
+        const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+        if (step !== undefined) focus(i + step);
+        else if (e.key === 'Home') focus(0);
+        else if (e.key === 'End') focus(buttons.length - 1);
+        else return;
+        // Or the page scrolls out from under the thing that just took focus.
+        e.preventDefault();
+      });
+    });
   }
 
   /**
@@ -188,10 +258,15 @@ export class HUD {
     return false;
   }
 
-  onAction({ onStart, onRestart, onRescue, onMute, onHelp, onDifficulty }) {
+  onAction({ onStart, onRestart, onRescue, onMute, onHelp, onDifficulty, onRun }) {
     for (const btn of this.el.diffButtons) {
       btn.addEventListener('click', () => onDifficulty?.(btn.dataset.difficulty));
     }
+    for (const btn of this.el.runButtons) {
+      btn.addEventListener('click', () => onRun?.(btn.dataset.run));
+    }
+    this._pickerKeys(this.el.runButtons);
+    this._pickerKeys(this.el.diffButtons);
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
     this.el.again.addEventListener('click', onRestart);
@@ -212,6 +287,24 @@ export class HUD {
       btn.classList.toggle('on', btn.dataset.difficulty === name);
     }
     if (this.el.diffBlurb) this.el.diffBlurb.textContent = presetInfo(name).blurb;
+  }
+
+  /**
+   * Marks the chosen run, and names it on the results screens.
+   *
+   * The badges are written here rather than in `showCrash`/`showFinish`
+   * because the run cannot change mid-descent: whatever is selected on the
+   * title screen is what the score that follows belongs to.
+   */
+  setRun(id) {
+    const info = runInfo(id);
+    for (const btn of this.el.runButtons) {
+      const on = btn.dataset.run === info.id;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    if (this.el.finishRun) this.el.finishRun.textContent = info.name;
+    if (this.el.crashRun) this.el.crashRun.textContent = info.name;
   }
 
   /** Says what just happened, so a sudden loss of speed is not a mystery. */

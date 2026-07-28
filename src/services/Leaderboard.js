@@ -16,15 +16,43 @@
  * and `checksum`, which lets a submission be tied to the run summary it claims
  * to describe. Adding them now costs nothing; adding them later means
  * migrating everything already stored.
+ *
+ * `course` was the third of those, and it is the one that came due. It says
+ * *which run* was ridden, and unlike `seed` it is now read: the tables split on
+ * course as well as difficulty, because Park and Classic are no more comparable
+ * than cruise and original are. Everything filed before the field existed was
+ * ridden on Classic, and is migrated to say so rather than being dropped.
  */
 
 const KEY = 'alpine-carve.scores.v1';
 const KEEP = 50;
 
+/** The run every entry belongs to when nothing says otherwise. */
+export const DEFAULT_COURSE = 'classic';
+
+/**
+ * Which table a row belongs in.
+ *
+ * Callers may pass either a bare difficulty name — which is what every caller
+ * did before there was more than one course, and what a Classic-only caller
+ * still reasonably means — or the full `{ course, difficulty }` pair.
+ */
+export function tableOf(where) {
+  if (typeof where === 'string' || where == null) {
+    return { course: DEFAULT_COURSE, difficulty: where ?? 'cruise' };
+  }
+  return {
+    course: where.course ?? DEFAULT_COURSE,
+    difficulty: where.difficulty ?? 'cruise',
+  };
+}
+
+const tableKey = (row) => `${row.course ?? DEFAULT_COURSE}|${row.difficulty}`;
+
 /** The shape every store speaks in. Anything missing is filled in here. */
 export function makeEntry({
   name, score, timeMs, tricks = 0, topSpeed = 0, bestAir = 0,
-  difficulty = 'cruise', seed = 0, finished = true,
+  difficulty = 'cruise', course = DEFAULT_COURSE, seed = 0, finished = true,
 }) {
   const entry = {
     name: String(name || 'RIDER').slice(0, 14),
@@ -34,9 +62,13 @@ export function makeEntry({
     topSpeed: +topSpeed.toFixed(2),
     bestAir: +bestAir.toFixed(2),
     difficulty,
+    course,
     seed,
     finished,
-    version: 1,
+    // Bumped when `course` joined the checksummed fields. The version is what
+    // tells `checksum()` which field list a row was signed over, so a v1 row
+    // that predates the course split still verifies as the v1 row it is.
+    version: 2,
     createdAt: Date.now(),
   };
   entry.checksum = checksum(entry);
@@ -53,7 +85,13 @@ export function makeEntry({
  * payload from a hand-written one.
  */
 function checksum(e) {
-  const s = `${e.name}|${e.score}|${e.timeMs}|${e.tricks}|${e.difficulty}|${e.seed}|${e.version}`;
+  const head = `${e.name}|${e.score}|${e.timeMs}|${e.tricks}|${e.difficulty}`;
+  // Version 1 rows were signed before there was a course to sign. Rebuilding
+  // their string the way it was built then is what lets a migrated row keep the
+  // checksum it already has instead of being quietly invalidated by an upgrade.
+  const s = e.version >= 2
+    ? `${head}|${e.course}|${e.seed}|${e.version}`
+    : `${head}|${e.seed}|${e.version}`;
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -81,10 +119,12 @@ function rank(a, b) {
 /**
  * The one that ships: the player's own browser.
  *
- * Kept per difficulty, because CRUISE and ORIGINAL are different games — the
- * same rider scores far more on cruise, where the air is longer and the
- * landings forgive more, and mixing them into one table would make the
- * original's rows unreachable and the comparison meaningless.
+ * Kept per course *and* per difficulty, because CRUISE and ORIGINAL are
+ * different games — the same rider scores far more on cruise, where the air is
+ * longer and the landings forgive more — and because Classic and Park are
+ * different mountains, with different amounts of scoreable furniture on them.
+ * Mixing either pair into one table would make half the rows unreachable and
+ * the comparison meaningless.
  */
 export class LocalStore {
   constructor(key = KEY) {
@@ -95,10 +135,37 @@ export class LocalStore {
     try {
       const raw = localStorage.getItem(this.key);
       const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return this._migrate(parsed);
     } catch {
       return []; // private browsing, a corrupted value, an embedded frame
     }
+  }
+
+  /**
+   * Brings rows written before the course split up to date.
+   *
+   * There was exactly one mountain when they were filed, so every one of them
+   * is a Classic run and gets stamped as such. The alternative — treating a
+   * missing `course` as its own table, or dropping the rows — would either
+   * strand somebody's whole history in a table with no name or throw away the
+   * only thing on the title screen that makes them ride again.
+   *
+   * Written back the first time it happens, so this is a one-off cost rather
+   * than something every read pays. The rows keep their `version: 1` and their
+   * original checksum: they really were signed as v1 rows, and pretending
+   * otherwise would be a lie a server could catch.
+   */
+  _migrate(rows) {
+    let changed = false;
+    for (const row of rows) {
+      if (row && typeof row === 'object' && row.course === undefined) {
+        row.course = DEFAULT_COURSE;
+        changed = true;
+      }
+    }
+    if (changed) this._write(rows);
+    return rows;
   }
 
   _write(rows) {
@@ -112,15 +179,16 @@ export class LocalStore {
   async submit(entry) {
     const rows = this._read();
     rows.push(entry);
-    // Trimmed per difficulty rather than globally, or a good run on one would
-    // slowly evict the whole table of the other.
-    const byDifficulty = new Map();
+    // Trimmed per table rather than globally, or an afternoon in the park would
+    // slowly evict every Classic run anybody had ever filed.
+    const byTable = new Map();
     for (const row of rows) {
-      if (!byDifficulty.has(row.difficulty)) byDifficulty.set(row.difficulty, []);
-      byDifficulty.get(row.difficulty).push(row);
+      const key = tableKey(row);
+      if (!byTable.has(key)) byTable.set(key, []);
+      byTable.get(key).push(row);
     }
     const kept = [];
-    for (const group of byDifficulty.values()) {
+    for (const group of byTable.values()) {
       group.sort(rank);
       kept.push(...group.slice(0, KEEP));
     }
@@ -128,8 +196,11 @@ export class LocalStore {
     return entry;
   }
 
-  async top(difficulty) {
-    return this._read().filter((r) => r.difficulty === difficulty).sort(rank);
+  async top(where) {
+    const { course, difficulty } = tableOf(where);
+    return this._read()
+      .filter((r) => r.difficulty === difficulty && (r.course ?? DEFAULT_COURSE) === course)
+      .sort(rank);
   }
 
   async clear() {
@@ -170,8 +241,10 @@ export class RemoteStore {
     });
   }
 
-  async top(difficulty) {
-    return this._fetch(`?difficulty=${encodeURIComponent(difficulty)}&limit=${KEEP}`);
+  async top(where) {
+    const { course, difficulty } = tableOf(where);
+    const q = new URLSearchParams({ course, difficulty, limit: String(KEEP) });
+    return this._fetch(`?${q}`);
   }
 }
 
@@ -196,7 +269,7 @@ export class Leaderboard {
     const entry = makeEntry(fields);
     try {
       await this.store.submit(entry);
-      const rows = await this.store.top(entry.difficulty);
+      const rows = await this.store.top({ course: entry.course, difficulty: entry.difficulty });
       const at = rows.findIndex((r) => r.checksum === entry.checksum && r.createdAt === entry.createdAt);
       const mine = rows.filter((r) => r.name === entry.name);
       return {
@@ -212,23 +285,28 @@ export class Leaderboard {
     }
   }
 
-  /** The table, best first. Never throws — an empty board is a valid answer. */
-  async top(difficulty, limit = 10) {
+  /**
+   * The table, best first. Never throws — an empty board is a valid answer.
+   *
+   * `where` is a `{ course, difficulty }` pair, or a bare difficulty name for
+   * the Classic table.
+   */
+  async top(where, limit = 10) {
     try {
-      return (await this.store.top(difficulty)).slice(0, limit);
+      return (await this.store.top(where)).slice(0, limit);
     } catch {
       return [];
     }
   }
 
   /** Where a score *would* land, without filing it. */
-  async rankOf(difficulty, score) {
-    const rows = await this.top(difficulty, KEEP);
+  async rankOf(where, score) {
+    const rows = await this.top(where, KEEP);
     const at = rows.findIndex((r) => r.score < score);
     return at < 0 ? rows.length + 1 : at + 1;
   }
 
-  async clear(difficulty) {
-    if (this.store.clear) await this.store.clear(difficulty);
+  async clear(where) {
+    if (this.store.clear) await this.store.clear(where);
   }
 }

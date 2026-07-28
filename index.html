@@ -123,6 +123,15 @@
                  placeholder="YOUR NAME" autocomplete="off" spellcheck="false" />
         </div>
 
+        <!-- The cards are written by the HUD from the run list, so adding a
+             run never means editing this file. -->
+        <h3 class="board-title board-title-mini">CHOOSE YOUR RUN</h3>
+        <div id="run-picker" class="runs" role="group" aria-label="Course"></div>
+        <p class="picker-hint keys-only">
+          <kbd>←</kbd><kbd>→</kbd> to look, <kbd>Enter</kbd> to pick
+        </p>
+
+        <h3 class="board-title board-title-mini">HOW IT RIDES</h3>
         <div class="difficulty" role="group" aria-label="Difficulty">
           <button id="diff-cruise" class="diff-btn" type="button" data-difficulty="cruise">CRUISE</button>
           <button id="diff-original" class="diff-btn" type="button" data-difficulty="original">ORIGINAL</button>
@@ -151,6 +160,9 @@
       <!-- Crash -->
       <section id="screen-crash" class="screen hidden">
         <h2 class="verdict">WIPEOUT</h2>
+        <!-- Which mountain this score belongs to. The tables are split by run,
+             so a screen that did not say would be quietly ambiguous. -->
+        <p id="crash-run" class="run-badge">CLASSIC</p>
         <p id="crash-reason" class="sub">You caught an edge.</p>
         <div class="hero-score">
           <span id="crash-score">0</span>
@@ -174,6 +186,7 @@
       <!-- Finish -->
       <section id="screen-finish" class="screen hidden">
         <h2 class="verdict finish">RUN COMPLETE</h2>
+        <p id="finish-run" class="run-badge">CLASSIC</p>
         <p class="sub">You made it to the village.</p>
         <div class="hero-score">
           <span id="finish-score">0</span>
