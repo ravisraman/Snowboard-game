@@ -152,12 +152,19 @@ const results = await page.evaluate(() => {
   }
 
   /**
-   * The spine kicker's two lobes are mirror images of each other, so a
-   * symmetric straight-line approach into either one is, correctly, a
-   * symmetric result — the split reads as a visual and geometric choice of
-   * line, not as a lateral force this physics model has no channel for. What
-   * has to hold regardless of which lobe you take is the ordinary contract
-   * every kicker keeps: ride up either half and it sends you.
+   * The spine kicker's two lobes are mirror images of each other, and the ramp
+   * they build is genuinely banked — each half's steepest line is rotated
+   * twenty degrees away from the other. Which half you ride up therefore
+   * decides which way you get thrown.
+   *
+   * It did not used to. The physics moved the rider exactly where the board
+   * pointed and the surface normal was only ever read along the heading, so a
+   * cross-slope had nothing to act through: both lobes returned the same
+   * result to four decimal places and a "the two sides differ" assertion had to
+   * be dropped as untestable. The lateral gravity coupling is the channel that
+   * was missing, so the split is now a physical outcome rather than only a
+   * geometric one — and this asserts both halves of the contract: either lobe
+   * still sends you, and the two send you somewhere measurably different.
    */
   {
     const hip = c.kickers.find((k) => k.hip);
@@ -169,24 +176,59 @@ const results = await page.evaluate(() => {
         const z0 = hip.z - 20;
         const tan = c.trackTangent(z0);
         r.position.set(hip.x + lateral * tan.z, 0, hip.z - hip.dirZ * 20 - lateral * tan.x);
-        r.yaw = Math.atan2(hip.dirX, hip.dirZ);
+        const approach = Math.atan2(hip.dirX, hip.dirZ);
+        r.yaw = approach;
         r.speed = 22;
         r.settle();
         let air = 0, sawAir = false;
+        // Where the lobe threw them. Two readings: the heading the *ramp*
+        // alone put on them — taken from the moment the board touches the
+        // ramp, so the approach's own gentle cross-slope is not counted — and
+        // how far across the ramp's axis they then flew.
+        let rampYaw = null, launchYaw = approach, launchX = 0, launchZ = 0, cross = 0;
         for (let i = 0; i < 500; i++) {
+          const wasGrounded = r.grounded;
           r.update(dt, NONE);
-          if (!r.grounded) { sawAir = true; air = Math.max(air, r.airTime); }
+          if (rampYaw === null && c.kickerPhase(r.position.x, r.position.z) > 0) {
+            rampYaw = r.yaw;
+          }
+          if (wasGrounded && !r.grounded) {
+            launchYaw = r.yaw;
+            launchX = r.position.x;
+            launchZ = r.position.z;
+          }
+          if (!r.grounded) {
+            sawAir = true;
+            air = Math.max(air, r.airTime);
+            cross = (r.position.x - launchX) * hip.dirZ - (r.position.z - launchZ) * hip.dirX;
+          }
           if (sawAir && r.grounded && air > 0.05) break;
         }
-        return air;
+        const wrap = (a) => {
+          while (a > Math.PI) a -= 2 * Math.PI;
+          while (a < -Math.PI) a += 2 * Math.PI;
+          return (a * 180) / Math.PI;
+        };
+        return { air, rampDeg: wrap(launchYaw - (rampYaw ?? approach)), cross };
       };
       const left = ride(-hip.halfWidth * 0.45);
       const right = ride(hip.halfWidth * 0.45);
       out.hipKicker = {
         found: true,
-        leftAir: +left.toFixed(2),
-        rightAir: +right.toFixed(2),
-        bothLaunch: left > 0.15 && right > 0.15,
+        leftAir: +left.air.toFixed(2),
+        rightAir: +right.air.toFixed(2),
+        bothLaunch: left.air > 0.15 && right.air > 0.15,
+        // Signed, and opposite. A ramp is a ramp: its cross-slope pushes you
+        // off the high side toward the low one, so the right-hand lobe leans
+        // you back toward the spine and the left-hand lobe the other way.
+        // Before there was any lateral coupling both of these were exactly
+        // zero, whichever lobe you took.
+        leftRampDeg: +left.rampDeg.toFixed(2),
+        rightRampDeg: +right.rampDeg.toFixed(2),
+        leftCrossM: +left.cross.toFixed(2),
+        rightCrossM: +right.cross.toFixed(2),
+        splitDeg: +(left.rampDeg - right.rampDeg).toFixed(2),
+        splitM: +(left.cross - right.cross).toFixed(2),
       };
     }
   }
@@ -877,6 +919,206 @@ const results = await page.evaluate(() => {
     }
   }
 
+  /* ==================================================================
+   * BANKING — lateral gravity coupling.
+   *
+   * Everything from here to `return out` belongs to one change: the rider
+   * now feels the cross-slope under the board and gets turned toward the
+   * local fall line by it. Kept in one contiguous block at the end of the
+   * measurement section so it reads as the single addition it is.
+   *
+   * Three things have to be true at once, and they pull against each other:
+   * a level surface must produce no drift at all (or the whole model is a
+   * random walk), a real bank must produce a turn you can feel, and the
+   * mountain the game already shipped must ride as it did before.
+   * ================================================================ */
+  {
+    /**
+     * Runs `fn` with the course's height field replaced by an analytic one.
+     *
+     * The overrides go on the instance and are deleted afterwards, which puts
+     * the prototype's own methods back rather than leaving a shadowing copy.
+     * `groundNormal` reads `this.groundHeight`, so it picks the synthetic
+     * surface up for free and the normal stays consistent with the height.
+     * Grooming and rails are stubbed out too: neither belongs to a plane, and
+     * a stray rail catch would silently end the measurement.
+     */
+    const onSurface = (heightAt, fn) => {
+      c.terrainHeight = heightAt;
+      c.groundHeight = heightAt;
+      c.kickerHeight = () => 0;
+      c.groomAt = () => 1;
+      c.railsNear = () => [];
+      try {
+        return fn();
+      } finally {
+        delete c.terrainHeight;
+        delete c.groundHeight;
+        delete c.kickerHeight;
+        delete c.groomAt;
+        delete c.railsNear;
+      }
+    };
+
+    /** Puts the rider on the synthetic surface at the origin, pointing down +Z. */
+    const placeAt = (yaw, speed) => {
+      r.reset();
+      r.position.set(0, 0, 0);
+      r.yaw = yaw;
+      r.speed = speed;
+      r.settle();
+      r.lean = 0;
+      r.leanVel = 0;
+      r.carveIntensity = 0;
+    };
+
+    /* 1. The control. A dead level surface has no cross-slope anywhere, in
+     * any direction, so a rider left alone on it must hold their heading
+     * exactly — not approximately. Any drift here is the term firing on
+     * nothing, and would show up on the mountain as a rider who cannot be
+     * pointed anywhere. Deliberately started off-axis: on a level plane the
+     * heading is irrelevant, which is the whole point of the check. */
+    out.bankFlat = onSurface(() => 0, () => {
+      placeAt(0.4, 20);
+      const yaw0 = r.yaw;
+      let worst = 0;
+      for (let i = 0; i < 120 * 5; i++) {
+        r.update(dt, NONE);
+        worst = Math.max(worst, Math.abs(r.yaw - yaw0));
+      }
+      return {
+        driftDeg: +((worst * 180) / Math.PI).toFixed(4),
+        seconds: 5,
+        endSpeed: +r.speed.toFixed(2),
+      };
+    });
+
+    /* 2. The bank. A plane pitched downhill *and* tilted across, which is the
+     * surface the old model had no channel for at all: the rider used to
+     * traverse it for ever on a heading they never chose to leave.
+     *
+     * The fall line of the plane is the direction of steepest descent, and it
+     * is what the rider should end up pointing at. Both tilts are measured, so
+     * the term is shown to be signed rather than merely non-zero. */
+    {
+      const pitch = 0.25;                 // 14 degrees down the hill
+      const cross = Math.tan(0.44);       // ~25 degrees across it
+      const ride = (side) => onSurface(
+        (x, z) => -pitch * z - side * cross * x,
+        () => {
+          placeAt(0, 18);
+          const samples = [];
+          for (let i = 0; i < 120 * 3; i++) {
+            r.update(dt, NONE);
+            if (i === 119 || i === 239 || i === 359) {
+              samples.push(+((r.yaw * 180) / Math.PI).toFixed(1));
+            }
+          }
+          return {
+            // Where the plane's own fall line points, as a heading.
+            fallLineDeg: +((Math.atan2(side * cross, pitch) * 180) / Math.PI).toFixed(1),
+            afterOneSec: samples[0],
+            afterTwoSec: samples[1],
+            afterThreeSec: samples[2],
+            driftedX: +r.position.x.toFixed(1),
+          };
+        }
+      );
+
+      // And the same bank ridden with the edge buried. An engaged edge is
+      // exactly what holds a rider across a slope, so a hard carve has to
+      // resist the drift rather than be dragged along by it. Compared against
+      // the same carve on a level plane, so what is measured is the bank's
+      // contribution and not the carve's own arc.
+      const carved = (heightAt) => onSurface(heightAt, () => {
+        placeAt(0, 18);
+        for (let i = 0; i < 120 * 2; i++) r.update(dt, { ...NONE, steer: -1 });
+        return r.yaw;
+      });
+      const carveLevel = carved(() => 0);
+      const carveBanked = carved((x, z) => -pitch * z - cross * x);
+
+      out.bankPlane = {
+        right: ride(1),
+        left: ride(-1),
+        // How much of the bank's pull survives a fully committed edge, as a
+        // fraction of what a flat-based rider gets over the same two seconds.
+        carveResidualDeg: +(((carveBanked - carveLevel) * 180) / Math.PI).toFixed(1),
+      };
+    }
+
+    /* 3. The regression. A closed-loop descent of the real mountain — the same
+     * follow-the-centre-line autopilot the run check uses, but driving the
+     * rider directly, so no traffic, no trees and no scoring can move the
+     * numbers. Purely Rider + Course, and therefore deterministic to the last
+     * digit for a given tuning.
+     *
+     * The baseline below was captured by running this exact block against the
+     * unmodified physics (bankDrift forced to 0, which reproduces the old
+     * model exactly — hoisting the `groundNormal` sample changes nothing on
+     * its own, the normal depends only on a position this frame has not moved
+     * yet). Both tunings are measured: cruise is what the game ships on. */
+    {
+      const descend = (limitSeconds) => {
+        r.reset();
+        let t = 0, top = 0, airTotal = 0, airs = 0, wasAir = false;
+        for (let i = 0; i < 120 * limitSeconds; i++) {
+          const lookZ = r.position.z + Math.max(14, r.speed * 1.7);
+          let d = Math.atan2(c.centerX(lookZ) - r.position.x, lookZ - r.position.z) - r.yaw;
+          while (d > Math.PI) d -= 2 * Math.PI;
+          while (d < -Math.PI) d += 2 * Math.PI;
+          r.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 2.4)) });
+          t += dt;
+          top = Math.max(top, r.speed);
+          if (!r.grounded) { airTotal += dt; if (!wasAir) airs++; }
+          wasAir = !r.grounded;
+          if (r.position.z >= c.finishZ || r.crashed) break;
+        }
+        return {
+          seconds: +t.toFixed(2),
+          topKmh: +(top * 3.6).toFixed(1),
+          airSeconds: +airTotal.toFixed(2),
+          airs,
+          endZ: +r.position.z.toFixed(1),
+          // How far the autopilot was pushed off the groomed line it is
+          // trying to hold — the number the drift would show up in first.
+          endOffset: +c.trackOffset(r.position.x, r.position.z).toFixed(2),
+          crashed: r.crashed,
+        };
+      };
+
+      const original = descend(200);
+      g.setDifficulty('cruise');
+      const cruise = descend(300);
+      g.setDifficulty('original');
+
+      // Airtime, measured properly. The descent's *total* hangtime is a coarse
+      // number: it is decided by which of eleven off-centre kickers a
+      // centre-line autopilot happens to clip, so a line moved by a handspan
+      // gains or loses a whole jump and the total swings by a fifth either way.
+      // Riding each kicker straight up the middle instead isolates what a
+      // player would actually notice — how long this jump gives you — and that
+      // is stable to a hundredth of a second.
+      const kickerAirs = [];
+      for (const k of c.kickers) {
+        r.reset();
+        r.position.set(k.x - k.dirX * 22, 0, k.z - k.dirZ * 22);
+        r.yaw = Math.atan2(k.dirX, k.dirZ);
+        r.speed = 24;
+        r.settle();
+        let air = 0, sawAir = false;
+        for (let i = 0; i < 700; i++) {
+          r.update(dt, NONE);
+          if (!r.grounded) { sawAir = true; air = Math.max(air, r.airTime); }
+          if (sawAir && r.grounded && air > 0.05) break;
+        }
+        kickerAirs.push(+air.toFixed(3));
+      }
+
+      out.bankRegression = { original, cruise, kickerAirs };
+    }
+  }
+
   return out;
 });
 
@@ -1256,6 +1498,17 @@ const checks = [
     results.hipKicker.found
       ? `left ${results.hipKicker.leftAir}s vs right ${results.hipKicker.rightAir}s`
       : 'no hip kicker generated on this seed'],
+  // Both lobes used to return the same result to every decimal place, because
+  // nothing in the physics could push a rider sideways. This is the assertion
+  // that was dropped as untestable in the previous phase, put back.
+  ['the spine kicker\'s two lobes now throw you different ways',
+    !results.hipKicker.found || (
+      results.hipKicker.leftRampDeg > 0.3 && results.hipKicker.rightRampDeg < -0.2 &&
+      results.hipKicker.splitDeg > 0.8 && results.hipKicker.splitM > 0.4),
+    results.hipKicker.found
+      ? `left ${results.hipKicker.leftRampDeg} deg / ${results.hipKicker.leftCrossM} m, ` +
+        `right ${results.hipKicker.rightRampDeg} deg / ${results.hipKicker.rightCrossM} m`
+      : 'no hip kicker generated on this seed'],
   ['cruise gets down the mountain too', results.cruiseRun.finished,
     results.cruiseRun.finished
       ? `reached the village in ${results.cruiseRun.seconds} s`
@@ -1382,6 +1635,107 @@ const checks = [
     results.curvedRail.found
       ? `worst drift ${results.curvedRail.worstDrift} m over ${results.curvedRail.frames} frames`
       : 'no curved rail generated on this seed'],
+
+  /* ==================================================================
+   * BANKING — lateral gravity coupling. One contiguous block, matching the
+   * measurement block at the end of the page evaluation.
+   * ================================================================ */
+
+  // The control. Not "small" — zero. The term is a projection of the surface
+  // normal onto the board's right, and on a level surface that projection is
+  // identically nothing whatever way the rider is pointing. Anything else here
+  // is a bug, not a tolerance.
+  ['a level surface pushes the rider nowhere at all',
+    results.bankFlat.driftDeg === 0,
+    `${results.bankFlat.driftDeg} deg over ${results.bankFlat.seconds}s, still doing ${results.bankFlat.endSpeed} m/s`],
+
+  // And the other end: a real bank has to be a turn, not a nudge. Twenty-five
+  // degrees across, ridden flat-based, and the rider is a third of the way
+  // round to the plane's fall line inside a second.
+  ['a banked surface turns the rider down its fall line',
+    results.bankPlane.right.afterOneSec > 12 && results.bankPlane.right.afterTwoSec > 25 &&
+    results.bankPlane.right.afterTwoSec < results.bankPlane.right.fallLineDeg,
+    `${results.bankPlane.right.afterOneSec}/${results.bankPlane.right.afterTwoSec}/` +
+    `${results.bankPlane.right.afterThreeSec} deg at 1/2/3 s, toward a ${results.bankPlane.right.fallLineDeg} deg fall line`],
+
+  // Signed, not merely non-zero: tilt the plane the other way and the turn has
+  // to mirror exactly. A term that turned you the same way down both would be
+  // a drift, not gravity.
+  ['banking is signed, and mirrors',
+    results.bankPlane.left.afterTwoSec === -results.bankPlane.right.afterTwoSec &&
+    results.bankPlane.left.driftedX === -results.bankPlane.right.driftedX,
+    `right ${results.bankPlane.right.driftedX} m, left ${results.bankPlane.left.driftedX} m across`],
+
+  // An engaged edge is exactly what holds a rider across a slope, so a
+  // committed carve has to keep most of the bank off. Not all of it — a board
+  // held on edge across a wall still washes down it a little, and a term that
+  // switched off entirely under steering would let you pin yourself anywhere.
+  ['a committed edge holds its line across a bank',
+    results.bankPlane.carveResidualDeg > 0 &&
+    results.bankPlane.carveResidualDeg < results.bankPlane.right.afterTwoSec * 0.55,
+    `${results.bankPlane.carveResidualDeg} deg of bank survives a full carve, vs ${results.bankPlane.right.afterTwoSec} deg flat-based`],
+
+  /* ---- Regression against the mountain as it shipped ----------------
+   *
+   * Baseline captured by running these same measurements with `bankDrift`
+   * forced to 0, which reproduces the old model exactly — the only other part
+   * of the change is hoisting the `groundNormal` sample above the yaw
+   * integration, and the normal depends solely on a position the frame has not
+   * moved yet, so on its own it is a no-op. Confirmed: with bankDrift 0 the
+   * whole 77-check suite returns byte-identical numbers, including the
+   * autopilot run's 94.4 s and 863 points.
+   *
+   *   original  90.82 s, 129.6 km/h top, 5 airs / 6.18 s, ends z=2870.1 off=1.14
+   *   cruise   136.93 s,  86.4 km/h top, 6 airs / 6.09 s, ends z=2870.0 off=0.24
+   *   per-kicker air  [1.350 1.233 1.083 1.358 1.133 1.333 1.375 1.142 1.308 1.283 1.333]
+   *
+   * Tolerances, and why each is what it is:
+   *   time      2%   — the measured shift is 0.08% and 0.17%; 2% is an order
+   *                    of magnitude of headroom and still far under the
+   *                    difference a player could feel over a three-minute run.
+   *   top speed 1%   — this one does not move at all (129.6 and 86.4 to the
+   *                    decimal), because terminal speed is set by gravity
+   *                    against drag and banking touches neither. A tight bound
+   *                    is the point: if it ever moves, something is wrong.
+   *   finish    hard — reaching the village is not a thing to be within a
+   *                    tolerance of.
+   *   line      0.5 m — how far the autopilot ends off the groomed centre. It
+   *                    moves by 0.13 m, and *toward* the middle: the bowl that
+   *                    cradles the piste now actually cradles.
+   *   air       0.03 s per kicker — three times the largest shift observed
+   *                    (0.009 s), and about two per cent of a 1.3 s air.
+   * -------------------------------------------------------------- */
+
+  ['the existing course still takes the same time to ride',
+    Math.abs(results.bankRegression.original.seconds - 90.82) / 90.82 < 0.02 &&
+    Math.abs(results.bankRegression.cruise.seconds - 136.93) / 136.93 < 0.02,
+    `original ${results.bankRegression.original.seconds}s vs 90.82s, cruise ${results.bankRegression.cruise.seconds}s vs 136.93s`],
+
+  ['the existing course still runs at the same speed',
+    Math.abs(results.bankRegression.original.topKmh - 129.6) / 129.6 < 0.01 &&
+    Math.abs(results.bankRegression.cruise.topKmh - 86.4) / 86.4 < 0.01,
+    `original ${results.bankRegression.original.topKmh} vs 129.6 km/h, cruise ${results.bankRegression.cruise.topKmh} vs 86.4 km/h`],
+
+  ['the existing course still ends at the village, on the line',
+    !results.bankRegression.original.crashed && !results.bankRegression.cruise.crashed &&
+    results.bankRegression.original.endZ >= 2870 && results.bankRegression.cruise.endZ >= 2870 &&
+    Math.abs(results.bankRegression.original.endOffset - 1.14) < 0.5 &&
+    Math.abs(results.bankRegression.cruise.endOffset - 0.24) < 0.5,
+    `original z=${results.bankRegression.original.endZ} off=${results.bankRegression.original.endOffset}, ` +
+    `cruise z=${results.bankRegression.cruise.endZ} off=${results.bankRegression.cruise.endOffset}`],
+
+  ['every kicker still gives the same air it always did',
+    (() => {
+      const was = [1.350, 1.233, 1.083, 1.358, 1.133, 1.333, 1.375, 1.142, 1.308, 1.283, 1.333];
+      const now = results.bankRegression.kickerAirs;
+      return now.length === was.length && now.every((a, i) => Math.abs(a - was[i]) <= 0.03);
+    })(),
+    (() => {
+      const was = [1.350, 1.233, 1.083, 1.358, 1.133, 1.333, 1.375, 1.142, 1.308, 1.283, 1.333];
+      const now = results.bankRegression.kickerAirs;
+      const worst = Math.max(...now.map((a, i) => Math.abs(a - (was[i] ?? a))));
+      return `worst shift ${worst.toFixed(3)}s over ${now.length} kickers`;
+    })()],
 ];
 
 console.log(JSON.stringify(results, null, 2));
