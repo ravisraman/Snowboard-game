@@ -1535,7 +1535,157 @@ const results = await page.evaluate(() => {
     };
   }
 
+
   return out;
+});
+
+/* ==================================================================
+ * THE THREE RUNS — that all of them build, ride, and differ.
+ *
+ * Everything above this point measures one mechanic in isolation, usually on
+ * a course built to show it off. This block is the opposite: it takes the
+ * three runs the game actually offers and checks the things that only go
+ * wrong once the pieces are assembled.
+ *
+ * Three failure modes, all of which have really happened here:
+ *
+ *   1. The picker damages the terrain. `Game.js` builds the course from the
+ *      *normalised* run — `new Course(run.seed, run)` — so every key
+ *      `RunSelect.normalise()` writes lands in the terrain config. It used to
+ *      write `grade`, which in `Runs.js` is the fall line's steepness curve,
+ *      replacing the whole curve with a UI integer. The game booted to
+ *      `g.bells is not iterable` before the first frame. Nothing in the
+ *      presets could have caught it, because the presets were correct.
+ *
+ *   2. Features stand on the divider. The kicker and rail walks place by
+ *      drawing an offset and know nothing about the fork, so on a run with
+ *      one they land straddling the ridge — a take-off with a hill through
+ *      the middle of it. `Course._clearOfDivider` pushes them into a lane;
+ *      this asserts none survived.
+ *
+ *   3. A run is configured but empty. Backcountry asked for occasional rails
+ *      at `chance: 0.12` per step against a 200-380 m stride and got zero of
+ *      them. Every run has to actually contain what it advertises.
+ *
+ * `tools/audit-runs.mjs` prints the whole layout of all three runs and is the
+ * thing to reach for when one of these fails — it says *where*.
+ * ================================================================ */
+results.runs = await page.evaluate(async () => {
+  const g = window.game;
+  const dt = 1 / 120;
+  const NONE = { steer: 0, tuck: false, ollie: false, grab: null };
+
+  const { RUNS: PICKER_RUNS } = await import('/src/core/RunSelect.js');
+  const { Course } = await import('/src/world/Course.js');
+  const { Rider } = await import('/src/entities/Rider.js');
+  const { buildForest } = await import('/src/world/Trees.js');
+
+  const RIDGE_MATTERS_M = 0.35;   // below a board edge's depth, there is no ridge
+
+/**
+ * Rides a run top to bottom on the tuning the game ships on, steering for
+ * the centre line the way the existing descent regression does.
+ *
+ * This is the coarsest assertion in the file and the most important one: a
+ * run that cannot be completed is not a run, however good its numbers look
+ * feature by feature. It is deliberately the *same* autopilot for all three
+ * so the comparison between them means something — Backcountry taking
+ * longer than the Park is the terrain, not a different driver.
+ */
+  const rideWhole = (course, rider) => {
+    rider.reset();
+
+    /**
+     * Where across the piste to aim: the centre line, or a lane through a fork.
+     *
+     * Aiming at `centerX` through a fork means aiming at the crest of the
+     * divider, and this driver — unlike a player — corrects back onto that line
+     * every frame, so it balances on top of the ridge and grinds down it at
+     * walking pace. Measured before this existed: the Park took 224 seconds
+     * against Classic's 91, with a low of 7 km/h at u = -3.5 m. Nothing was
+     * wrong with the run. A human is pushed off the crest by the banking term
+     * within a few metres and has to pick a side, which is the entire point of
+     * the feature, so the driver picks one too — whichever it is already
+     * nearest, which is also how a player ends up choosing.
+     */
+    const aimU = (z, u) => {
+      const amount = course.forkAmount(z);
+      if (amount <= 0) return 0;
+      const inner = course.config.fork.maxSeparation * amount;
+      return (u < 0 ? -1 : 1) * (inner + course.trackHalfWidthAt(z)) * 0.5;
+    };
+
+    let t = 0, top = 0, airs = 0, wasAir = false;
+    for (let i = 0; i < 120 * 400; i++) {
+      const lookZ = rider.position.z + Math.max(14, rider.speed * 1.7);
+      const tan = course.trackTangent(lookZ);
+      const aimX = course.centerX(lookZ) +
+        aimU(lookZ, course.trackOffset(rider.position.x, rider.position.z)) * tan.z;
+      let d = Math.atan2(aimX - rider.position.x, lookZ - rider.position.z) - rider.yaw;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      rider.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 2.4)) });
+      t += dt;
+      top = Math.max(top, rider.speed);
+      if (!rider.grounded) { if (!wasAir) airs++; }
+      wasAir = !rider.grounded;
+      if (rider.position.z >= course.finishZ || rider.crashed) break;
+    }
+    return {
+      seconds: +t.toFixed(1),
+      topKmh: +(top * 3.6).toFixed(1),
+      airs,
+      endZ: +rider.position.z.toFixed(0),
+      finished: rider.position.z >= course.finishZ,
+      crashed: rider.crashed,
+    };
+  };
+
+  g.setDifficulty('cruise');
+  const runs = PICKER_RUNS.map((run) => {
+    // Built from the *picker's* object, exactly as `Game.js` does it — which
+    // is the only way failure mode 1 is visible.
+    const course = new Course(run.seed, run);
+    const forest = buildForest(course, {});
+    const off = (f) => f.x - course.centerX(f.z);
+
+    /* Is any feature standing on the ridge, where the ridge is real? */
+    const onDivider = (f, halfWidth) => {
+      const amount = course.forkAmount(f.z);
+      if (amount * (run.fork.maxHeight ?? 0) < RIDGE_MATTERS_M) return false;
+      return Math.abs(off(f)) - halfWidth < amount * run.fork.maxSeparation;
+    };
+
+    return {
+      id: run.id,
+      rating: run.rating,
+      // The terrain config, still intact after normalisation.
+      gradeBells: Array.isArray(run.grade?.bells) ? run.grade.bells.length : `NOT AN ARRAY: ${run.grade}`,
+      halfWidth: course.trackHalfWidth,
+      widest: +course.maxTrackHalfWidth().toFixed(1),
+      kickers: course.kickers.length,
+      rails: course.rails.length,
+      trees: forest.list.length,
+      hips: course.kickers.filter((k) => k.hip).length,
+      stepDowns: course.kickers.filter((k) => k.stepDown).length,
+      gaps: course.kickers.filter((k) => k.gap).length,
+      // Bores are built by `Game.js` from the config, not by `Course` — so
+      // this is what the run asks for. That they come out passable when built
+      // is the tunnel block's job, a few dozen checks up.
+      tunnels: run.tunnels.enabled ? run.tunnels.spans.length : 0,
+      forkOpen: run.fork.enabled,
+      mogulsOn: run.moguls.enabled,
+      onDivider: course.kickers.filter((k) => onDivider(k, k.halfWidth)).length +
+                 course.rails.filter((r) => onDivider(r, r.halfWidth)).length,
+      // A decked shape cannot share z with the fork at all: the deck is a
+      // plateau in the kicker field and the ridge is one in the terrain
+      // field, and they are summed by two systems that have never met.
+      deckedInFork: course.kickers.filter((k) => k.deck && course.forkAmount(k.z) > 0).length,
+      ride: rideWhole(course, new Rider(course)),
+    };
+  });
+  g.setDifficulty('original');
+  return runs;
 });
 
 /* ------------------------------------------------------------------
@@ -2914,6 +3064,64 @@ const checks = [
     `${results.farSide.stepDownLine.climbAt} m, gap ${results.farSide.gapLine.steepestClimb} at ` +
     `${results.farSide.gapLine.climbAt} m`],
   /* ================= END far-side kickers =========================== */
+
+  /* ==================================================================
+   * THE THREE RUNS. See the measurement block for what each of these has
+   * actually caught; none of them is hypothetical.
+   * ================================================================ */
+  ['the picker hands the course generator an intact mountain',
+    results.runs.every((r) => r.gradeBells >= 1),
+    results.runs.map((r) => `${r.id}: ${r.gradeBells} bell(s)`).join(', ')],
+
+  ['all three runs are offered, gentlest first',
+    results.runs.length === 3 &&
+    results.runs.every((r, i) => r.rating === i + 1) &&
+    results.runs.map((r) => r.id).join(',') === 'classic,park,backcountry',
+    results.runs.map((r) => `${r.id} (${r.rating})`).join(' -> ')],
+
+  ['every run can be ridden from the gate to the finish',
+    results.runs.every((r) => r.ride.finished && !r.ride.crashed),
+    results.runs.map((r) => `${r.id} ${r.ride.seconds}s to z=${r.ride.endZ}`).join(', ')],
+
+  ['and they do not all ride the same',
+    (() => {
+      const s = results.runs.map((r) => r.ride.seconds);
+      return Math.max(...s) - Math.min(...s) > 8;
+    })(),
+    results.runs.map((r) => `${r.id} ${r.ride.seconds}s / ${r.ride.topKmh} km/h / ${r.ride.airs} airs`).join(', ')],
+
+  ['nothing anywhere is built on the fork divider',
+    results.runs.every((r) => r.onDivider === 0 && r.deckedInFork === 0),
+    results.runs.map((r) => `${r.id} ${r.onDivider} on the ridge, ${r.deckedInFork} decked inside the fork`).join('; ')],
+
+  ['each run actually contains what its card advertises',
+    (() => {
+      const by = Object.fromEntries(results.runs.map((r) => [r.id, r]));
+      return (
+        // Classic: the baseline, and still nothing built on it.
+        by.classic.kickers >= 8 && by.classic.rails >= 3 &&
+        !by.classic.forkOpen && !by.classic.mogulsOn && by.classic.tunnels === 0 &&
+        // Park: a jump line, rails end to end, every shape, a fork, tunnels.
+        by.park.kickers > by.classic.kickers && by.park.rails > by.classic.rails * 2 &&
+        by.park.hips === 1 && by.park.stepDowns === 1 && by.park.gaps === 1 &&
+        by.park.forkOpen && by.park.tunnels === 2 && !by.park.mogulsOn &&
+        // Backcountry: narrow, treed, bumped, with a gap and no built things.
+        by.backcountry.halfWidth < by.classic.halfWidth * 0.75 &&
+        by.backcountry.trees > by.classic.trees &&
+        by.backcountry.mogulsOn && by.backcountry.gaps === 1 &&
+        by.backcountry.rails >= 1 && !by.backcountry.forkOpen && by.backcountry.tunnels === 0
+      );
+    })(),
+    results.runs.map((r) =>
+      `${r.id}: ${r.kickers}k/${r.rails}r/${r.trees}t` +
+      `${r.hips ? ' hip' : ''}${r.stepDowns ? ' step' : ''}${r.gaps ? ' gap' : ''}` +
+      `${r.forkOpen ? ' fork' : ''}${r.mogulsOn ? ' moguls' : ''}${r.tunnels ? ` ${r.tunnels}xtunnel` : ''}`
+    ).join('; ')],
+
+  ['only the run with a fork ever widens its piste',
+    results.runs.every((r) => (r.forkOpen ? r.widest > r.halfWidth : r.widest === r.halfWidth)),
+    results.runs.map((r) => `${r.id} ${r.halfWidth}->${r.widest} m`).join(', ')],
+  /* ==================== END the three runs ========================== */
 ];
 
 console.log(JSON.stringify(results, null, 2));

@@ -37,7 +37,16 @@ function normalise(preset, index) {
     features: preset.features ?? [],
     // 1–3, gentlest first. Drives the dots on the card, so a child who cannot
     // yet read the copy can still see which run is the easy one.
-    grade: preset.grade ?? index + 1,
+    //
+    // Called `rating` and not `grade` throughout, deliberately. What comes out
+    // of here is not just a card: `Game.js` builds the course straight from it
+    // (`new Course(run.seed, run)`), so every key this function writes lands in
+    // the terrain config. `grade` there is the fall line's steepness curve, and
+    // spreading a UI integer over it replaces the whole curve with the number
+    // 1 — a mountain with no bells, which fails at `for (const b of g.bells)`
+    // before the first frame. Anything added here must be a name `Runs.js` does
+    // not already use.
+    rating: preset.rating ?? index + 1,
     hint: preset.hint ?? ['GENTLE', 'PLAYFUL', 'WILD'][Math.min(2, index)],
     seed: preset.seed,
   };

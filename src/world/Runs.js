@@ -62,10 +62,15 @@ export const CLASSIC = {
    * new run is still one object in one file — the terrain and the way the
    * player is told about it have no business drifting apart.
    *
-   * `grade` is 1-3, gentlest first, and drives the dots on the card: a child
+   * `rating` is 1-3, gentlest first, and drives the dots on the card: a child
    * who cannot yet read the blurb can still see which run is the easy one.
+   *
+   * It is *not* called `grade`, which on this object is already the fall line's
+   * steepness curve. The two would be the same key in the same object literal,
+   * the terrain one would silently win, and the card would render its dots from
+   * an object — which is exactly what happened before this comment existed.
    */
-  grade: 1,
+  rating: 1,
   hint: 'GENTLE',
   features: ['Big friendly kickers', 'Room to make mistakes'],
   /** Default world seed. A score is only comparable with one from the same mountain. */
@@ -760,8 +765,337 @@ function deepMerge(base, over) {
 
 const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
+/* ===========================================================================
+ * The other two mountains
+ *
+ * Both are `defineRun` calls, so they say only what makes them different and
+ * inherit the rest. Read them against `CLASSIC` above: anything not mentioned
+ * here is deliberately the same.
+ *
+ * These sit below `isPlain` rather than next to `CLASSIC` on purpose.
+ * `defineRun` is a hoisted function declaration and could be called from
+ * anywhere, but it reaches `isPlain`, which is a `const` — calling it earlier
+ * in the file is a temporal-dead-zone crash at import time, before any of this
+ * has a chance to be wrong in an interesting way.
+ * ======================================================================== */
+
+/**
+ * The Park — built, deliberate, and dense with things to hit.
+ *
+ * The design rule is *rhythm*. A park is not a mountain with more jumps on it;
+ * it is a sequence, and the rider should always be able to see the next thing
+ * from the last one. So the line is straightened (two waves instead of three,
+ * smaller amplitudes), the fall line is flattened into one long even pitch
+ * instead of Classic's two steep bells, and the swells between features are
+ * halved. Everything that would make the run *surprising* is spent instead on
+ * making the features readable from far enough back to set up for them.
+ *
+ * The four signature obstacles are spaced down the hill by `atFraction`, and
+ * the fork and both tunnels are placed in the gaps between them. Those
+ * placements are not free-hand: `tools/audit-runs.mjs` reports where every
+ * kicker actually lands for this seed and flags any that collide with the
+ * fork's divider or a tunnel mouth. Change the seed, or the kicker spacing,
+ * and that audit has to be re-run.
+ */
+export const PARK = defineRun({
+  id: 'park',
+  name: 'The Park',
+  blurb: 'A built jump line, rails end to end, and a fork you get to call.',
+  rating: 2,
+  hint: 'PLAYFUL',
+  features: ['Jump line, rails and tunnels', 'A fork — pick your own way down'],
+  seed: 20240613,
+
+  /**
+   * One long even pitch. A park wants the *same* speed at every take-off, so
+   * the jumps can be built to one size; Classic's two steeper bells are what
+   * give it its character and exactly what a park does not want.
+   */
+  grade: {
+    base: 0.178,
+    bells: [{ amp: 0.045, center: 1500, width: 460 }],
+    runout: { amount: 0.135, from: 2660, to: 2980 },
+  },
+
+  /** Shaped ground between features, not rolling ground. */
+  undulation: {
+    taper: { amount: 0.85, from: 2560, to: 2940 },
+    waves: [
+      { amp: 2.0, freq: 0.006, phase: 0 },
+      { amp: 1.1, freq: 0.015, phase: 1.3 },
+    ],
+  },
+
+  /**
+   * Straighter than Classic and one metre narrower. The narrowing is not
+   * difficulty — it is so the corduroy reads as a built corridor with an edge
+   * you can see, rather than an open face you happen to be crossing.
+   */
+  track: {
+    halfWidth: 15,
+    waves: [
+      { amp: 22, freq: 0.0038, phase: 0 },
+      { amp: 9, freq: 0.0091, phase: 2.1 },
+    ],
+  },
+
+  /** Flatter across than Classic: a park floor, not a valley floor. */
+  bowl: { strength: 0.07, softness: 34, easeAmount: 0.45, easeFrom: 90, easeTo: 320 },
+
+  /**
+   * The jump line. Tighter spacing and a taller, wider size band than Classic —
+   * every one of these is meant to be hit, so none of them is allowed to be the
+   * little one you roll over.
+   *
+   * All four signature shapes are on, which is what makes this the park run.
+   * Their `atFraction` values are chosen to spread them down the hill *and* to
+   * keep each one clear of the fork and the tunnels — see the audit note above.
+   */
+  kickers: {
+    spacing: { min: 105, range: 70 },
+    height: { min: 1.8, range: 2.0 },
+    length: { min: 7.5, range: 5.0 },
+    width: { min: 9.0, range: 5.5 },
+    hip: { enabled: true, atFraction: 0.46, angle: 0.4, minHalfWidth: 6.5, minLength: 10 },
+    stepDown: { enabled: true, atFraction: 0.30 },
+    gap: { enabled: true, atFraction: 0.62 },
+  },
+
+  /** Rails everywhere — the one thing a park has that a mountain does not. */
+  rails: {
+    firstZ: 180,
+    spacing: { min: 90, range: 60 },
+    chance: 0.85,
+    length: { min: 11, range: 9 },
+    curveChance: 0.5,
+  },
+
+  /**
+   * The fork, sited late: by two thousand metres the rider has hit every jump
+   * shape the run owns and a decision is the only thing left to give them.
+   */
+  fork: {
+    enabled: true,
+    /**
+     * The rejoin finishes at 2470 rather than 2530 because the run's widest
+     * kicker stands at 2486. `_clearOfDivider` will not move a feature into a
+     * lane narrower than the feature, and a fourteen-metre table does not fit
+     * beside a ridge that is still half a metre proud — so the ridge is done
+     * before the kicker starts. `tools/audit-runs.mjs` is what says whether
+     * that is still true after any change to the seed or the kicker spacing.
+     */
+    z0: 1990, z1: 2120, z2: 2340, z3: 2470,
+    maxHeight: 3,
+    maxSeparation: 6.5,
+    widen: 10,
+    groomGap: 0.5,
+  },
+
+  /**
+   * Two bores. The first is a mid-run surprise; the second spits the rider out
+   * into the village with the finish already in sight, which is the best thing
+   * a tunnel exit can be pointed at.
+   */
+  tunnels: {
+    enabled: true,
+    spans: [
+      { from: 1000, to: 1150 },
+      { from: 2620, to: 2770, crown: 13, ribSpacing: 6 },
+    ],
+  },
+
+  /** Groomed. A park with moguls in it is a park nobody swept. */
+  moguls: { enabled: false },
+
+  /** Held well back, so the built features are the only things in the way. */
+  trees: {
+    seed: 77021,
+    density: 0.34,
+    bands: {
+      encroach: { upTo: 0.005, gap: 4.5, range: 2.4 },
+      near: { upTo: 0.45, gap: 8, range: 26 },
+      mid: { upTo: 0.8, gap: 22, range: 150 },
+      far: { from: 200, range: 230 },
+    },
+  },
+
+  /** Denser stars, fewer slalom gates: this run's rhythm is the jump line. */
+  collectibles: {
+    seed: 4409,
+    stars: { skipChance: 0.45 },
+    gates: { chance: 0.3 },
+  },
+});
+
+/**
+ * The Backcountry — tight, natural, and technical.
+ *
+ * Everything the Park spends on legibility this run spends on the opposite. The
+ * line wanders hard and fast (a third wave, at more than double Classic's
+ * amplitude on the low frequency), the corduroy is five metres narrower than
+ * Classic on each side, and the trees come in close enough that the piste edge
+ * is a thing you are actively avoiding rather than a thing you notice.
+ *
+ * The bowl is where this run earns the banking term. Classic's `strength: 0.1`
+ * against a 30 m softness is nearly flat within the track; at `0.16` against 22
+ * the walls just off the corduroy have a real cross-slope, so a rider who runs
+ * wide gets *turned* — pushed back down toward the line if they are on the
+ * inside of the wander, and carried further out if they are not. That is a
+ * genuinely different ride rather than the same physics with more trees, and it
+ * only works because lateral gravity coupling exists.
+ *
+ * No fork and no tunnels: those are built things, and nothing out here is
+ * built. What it has instead is the gap jump and a long mogul field.
+ */
+export const BACKCOUNTRY = defineRun({
+  id: 'backcountry',
+  name: 'Backcountry',
+  blurb: 'Trees close in, the line narrows, and nothing out here was groomed for you.',
+  rating: 3,
+  hint: 'WILD',
+  features: ['Tight trees and a long mogul field', 'Gap jumps and banked walls'],
+  seed: 20241105,
+
+  /** Steeper throughout, and steeper again through both pitches. */
+  grade: {
+    base: 0.21,
+    bells: [
+      { amp: 0.085, center: 950, width: 300 },
+      { amp: 0.075, center: 1900, width: 340 },
+    ],
+    runout: { amount: 0.175, from: 2640, to: 2980 },
+  },
+
+  /** Rolling ground, barely tamed. */
+  undulation: {
+    taper: { amount: 0.85, from: 2560, to: 2940 },
+    waves: [
+      { amp: 5.2, freq: 0.0058, phase: 0.4 },
+      { amp: 3.1, freq: 0.0135, phase: 1.9 },
+      { amp: 1.6, freq: 0.029, phase: 0.9 },
+    ],
+  },
+
+  /**
+   * Narrow, and it wanders. Five metres off Classic's half-width on each side,
+   * with a plan-view line that swings further and turns over faster — so the
+   * corduroy is genuinely somewhere you have to keep finding.
+   */
+  track: {
+    halfWidth: 11,
+    edgeSoftness: 2.4,
+    waves: [
+      { amp: 42, freq: 0.0045, phase: 0.6 },
+      { amp: 19, freq: 0.0110, phase: 1.4 },
+      { amp: 9, freq: 0.0230, phase: 2.6 },
+    ],
+  },
+
+  /** The banked walls. See the note above — this is the run's real mechanic. */
+  bowl: { strength: 0.16, softness: 22, easeAmount: 0.45, easeFrom: 80, easeTo: 300 },
+
+  /** Deeper, lumpier snow either side of a narrower line. */
+  powder: {
+    blendFrom: -1,
+    blendTo: 7,
+    lumps: [
+      { amp: 1.25, freq: 0.036, seed: 71 },
+      { amp: 0.45, freq: 0.085, seed: 913 },
+    ],
+  },
+
+  /**
+   * Natural-feeling jumps: fewer, more varied, and smaller on average than the
+   * Park's, because out here a jump is terrain you happened to hit rather than
+   * something built to a spec. The gap is the exception and the signature.
+   */
+  kickers: {
+    spacing: { min: 170, range: 150 },
+    height: { min: 1.4, range: 2.2 },
+    length: { min: 6.5, range: 5.5 },
+    width: { min: 6.5, range: 5.0 },
+    /**
+     * Sited below the mogul field, not in it. A hip's whole point is that the
+     * approach line decides which way it throws you, and picking that line off
+     * a bump field is picking it out of a washing machine — the shape stops
+     * reading as a choice and starts reading as luck.
+     */
+    hip: { enabled: true, atFraction: 0.62, angle: 0.32, minHalfWidth: 6.5, minLength: 10 },
+    stepDown: { enabled: false },
+    gap: { enabled: true, atFraction: 0.72 },
+  },
+
+  /**
+   * The occasional fallen log, and nothing like a park's rail line. `chance` is
+   * per *step* rather than per run, so it has to be read against `spacing`:
+   * at 0.12 across a 200-380 m stride this produced no rails at all on the
+   * shipped seed, which is not "occasional", it is "absent".
+   */
+  rails: {
+    chance: 0.32,
+    spacing: { min: 150, range: 150 },
+    offsetMargin: 4,
+    length: { min: 8, range: 5 },
+    curveChance: 0.2,
+  },
+
+  /**
+   * A long bump field through the first pitch, where the run is already
+   * steepest — which is what makes it the technical section rather than a
+   * texture. `Terrain.js` refines its row spacing over this range, so the
+   * length is not free; six hundred metres is deliberate and about the most
+   * this should ever be.
+   */
+  moguls: {
+    enabled: true,
+    z0: 900, z1: 1010, z2: 1400, z3: 1520,
+    amp: 0.75,
+    spacingU: 8,
+    spacingZ: 11,
+    skew: 0.5,
+    edgeFade: 2.5,
+    jitter: 0.4,
+    noiseFreq: 0.022,
+    seed: 6607,
+  },
+
+  /** Built things belong on the Park. */
+  fork: { enabled: false },
+  tunnels: { enabled: false, spans: [] },
+
+  /**
+   * The forest, close in. `encroach` is up sixfold over Classic and its gap is
+   * cut to a metre and a half outside the tree's own collision radius, so trees
+   * really do stand at the edge of the corduroy. That is the whole run: the
+   * penalty for a wide line is immediate and visible, and the line is narrow.
+   */
+  trees: {
+    seed: 33107,
+    density: 0.86,
+    thin: { from: 30, over: 190, amount: 0.35 },
+    bands: {
+      encroach: { upTo: 0.12, gap: 1.5, range: 2.2 },
+      near: { upTo: 0.68, gap: 3, range: 24 },
+      mid: { upTo: 0.9, gap: 20, range: 150 },
+      far: { from: 200, range: 230 },
+    },
+  },
+
+  /**
+   * Stars are worth more here for the same reason they are harder: off the line
+   * on this run means in the trees. Gates are rare — `gates.maxSlope` rejects
+   * most of a wandering track anyway, and forcing them would put a slalom on a
+   * traverse.
+   */
+  collectibles: {
+    seed: 9151,
+    stars: { skipChance: 0.55, offTrackExtra: 6, detourChance: 0.6 },
+    gates: { chance: 0.28 },
+  },
+});
+
 /** Every run the game can offer, in the order a menu should list them. */
-export const RUNS = [CLASSIC];
+export const RUNS = [CLASSIC, PARK, BACKCOUNTRY];
 
 /** Look a run up by `id`, falling back to Classic rather than throwing. */
 export function runById(id) {

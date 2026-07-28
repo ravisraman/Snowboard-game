@@ -368,6 +368,44 @@ export class Course {
     return out;
   }
 
+  /**
+   * Moves a feature's across-track offset clear of the fork's divider.
+   *
+   * Kickers and rails are placed by walking z and drawing an offset, and that
+   * walk knows nothing about the fork — so on a run with one, three or four of
+   * them land straddling the ridge. A jump built across a divider is not a hard
+   * jump, it is a broken one: the ramp is a shape in the kicker field, the
+   * ridge is a shape in the terrain field, the two are summed, and what comes
+   * out is a take-off with a hill through the middle of it.
+   *
+   * Rather than drop those features, they get pushed into whichever lane they
+   * were already nearest — so the fork ends up with things to hit down *both*
+   * sides, which is what makes choosing a side interesting rather than
+   * arbitrary. A feature dead on the centre line goes left or right on the sign
+   * of its own offset, and exactly zero goes right.
+   *
+   * Returns the offset unchanged everywhere the fork is shut, which is the
+   * whole run on Classic and Backcountry — so this cannot move anything on a
+   * run without a fork, and the digests say so.
+   */
+  _clearOfDivider(offset, halfWidth, z) {
+    const amount = this.forkAmount(z);
+    if (amount <= 0) return offset;
+
+    const f = this.config.fork;
+    // Inner edge of the lane: the ridge's half-width as it stands at this z,
+    // plus the feature's own half-width so its flank clears the flank of the
+    // ridge, plus a metre so they are not exactly touching.
+    const inner = f.maxSeparation * amount + halfWidth + 1;
+    // Outer edge: the corduroy, widened by the fork, less the same clearance
+    // the placement walk already keeps from the piste edge.
+    const outer = this.trackHalfWidthAt(z) - halfWidth - 1;
+    if (outer <= inner) return offset;   // lane too narrow for this feature; leave it be
+
+    const side = offset < 0 ? -1 : 1;
+    return side * Math.min(Math.max(Math.abs(offset), inner), outer);
+  }
+
   /* ------------------------------------------------------------------
    * Kickers
    * ---------------------------------------------------------------- */
@@ -383,7 +421,11 @@ export class Course {
       const len = cfg.length.min + size * cfg.length.range;      // short and steep; ~25° at the lip
       const width = cfg.width.min + rng() * cfg.width.range;
       // Sit the kicker somewhere across the piste so lines have to be chosen.
-      const offset = rng.spread(this.trackHalfWidth - width * 0.5 - cfg.offsetMargin);
+      const offset = this._clearOfDivider(
+        rng.spread(this.trackHalfWidth - width * 0.5 - cfg.offsetMargin),
+        width * 0.5,
+        z,
+      );
       const cx = this.centerX(z) + offset * Math.cos(Math.atan(this.centerSlope(z)));
       const tan = this.trackTangent(z);
       this.kickers.push({
@@ -658,7 +700,11 @@ export class Course {
         const curved = rng() < cfg.curveChance;
         const len = cfg.length.min + rng() * cfg.length.range;
         const height = cfg.height.min + rng() * cfg.height.range;
-        const offset = rng.spread(this.trackHalfWidth - cfg.offsetMargin);
+        const offset = this._clearOfDivider(
+          rng.spread(this.trackHalfWidth - cfg.offsetMargin),
+          cfg.halfWidth,
+          z,
+        );
         const cx = this.centerX(z) + offset * Math.cos(Math.atan(this.centerSlope(z)));
         const tan = this.trackTangent(z);
         this.rails.push({

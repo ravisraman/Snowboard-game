@@ -117,12 +117,12 @@ export class HUD {
       // The hint word says it, the dots say it again without words. A child
       // who cannot yet read "GENTLE" can still count to one.
       const dots = [1, 2, 3]
-        .map((n) => `<i class="${n <= run.grade ? 'lit' : ''}"></i>`)
+        .map((n) => `<i class="${n <= run.rating ? 'lit' : ''}"></i>`)
         .join('');
       const features = run.features
         .map((f) => `<span>${esc(f)}</span>`)
         .join('');
-      return `<button class="run-card" type="button" data-run="${esc(run.id)}" data-grade="${run.grade}" aria-pressed="false">
+      return `<button class="run-card" type="button" data-run="${esc(run.id)}" data-grade="${run.rating}" aria-pressed="false">
           <span class="run-head">
             <span class="run-hint">${esc(run.hint)}</span>
             <span class="run-dots" aria-hidden="true">${dots}</span>
