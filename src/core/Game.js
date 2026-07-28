@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Course, COURSE } from '../world/Course.js';
+import { Course } from '../world/Course.js';
 import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
 import { buildRails } from '../world/Rails.js';
@@ -20,6 +20,9 @@ import { HUD } from './HUD.js';
 import { Score } from './Score.js';
 import { TouchControls } from './TouchControls.js';
 import { difficulty, applyDifficulty, loadDifficulty, presetInfo } from './Difficulty.js';
+// The run list. A stub until `src/world/Runs.js` lands — see the header of
+// `Runs.stub.js`; swapping to the real presets is one import there.
+import { runInfo, loadRun, saveRun, armDropIn, takeDropIn } from './Runs.stub.js';
 import { Leaderboard } from '../services/Leaderboard.js';
 import { Profile } from '../services/Profile.js';
 import { clamp } from './mathx.js';
@@ -67,6 +70,9 @@ export class Game {
     this.difficultyName = loadDifficulty();
     applyDifficulty(this.difficultyName);
 
+    // Which mountain gets built. Before `_buildWorld`, for obvious reasons.
+    this.runId = loadRun();
+
     this._buildWorld();
 
     // A steady cross-slope breeze, blowing across the fall line rather than
@@ -93,9 +99,11 @@ export class Game {
       onMute: () => this.hud.setMuted(this.audio.toggleMuted()),
       onHelp: () => this.toggleHelp(),
       onDifficulty: (name) => this.setDifficulty(name),
+      onRun: (id) => this.setRun(id),
     });
     this.hud.setMuted(this.audio.muted);
     this.hud.setDifficulty(this.difficultyName);
+    this.hud.setRun(this.runId);
 
     // Who is riding, and what everyone has scored. Both are local for now and
     // both are read through interfaces that a server can sit behind later.
@@ -107,6 +115,10 @@ export class Game {
 
     this.reset();
     this.hud.showScreen('title');
+
+    // Arrived here by picking a different run and pressing DROP IN: the reload
+    // was the rebuild, and this is the press it was carrying.
+    if (takeDropIn()) this.start();
   }
 
   /* ================================================================
@@ -114,8 +126,12 @@ export class Game {
    * ============================================================== */
 
   _buildWorld() {
-    const course = new Course();
+    const run = runInfo(this.runId);
+    const course = new Course(run.seed, run);
     this.course = course;
+    // What is actually standing, as opposed to what is selected. `start` reads
+    // it to notice that the player has picked a different mountain.
+    this._builtRunId = run.id;
 
     // Backdrop rides with the camera on X/Z so the peaks stay distant.
     this.backdrop = new THREE.Group();
@@ -254,8 +270,24 @@ export class Game {
     this._refreshTitleBoard();
   }
 
+  /**
+   * Picks a mountain. Unlike the difficulty this is not free mid-run — the
+   * world is built from it — so it only records the choice and repoints the
+   * board; `start` is where a different run actually gets built.
+   */
+  setRun(id) {
+    this.runId = runInfo(id).id;
+    saveRun(this.runId);
+    this.hud.setRun(this.runId);
+    // Each run keeps its own table, for the same reason each difficulty does.
+    this._refreshTitleBoard();
+  }
+
   async _refreshTitleBoard() {
-    this.hud.showTitleBoard(await this.leaderboard.top(this.difficultyName, 3));
+    // The table is the run and the tuning together — the title board has to
+    // show scores from the game you are about to play, not a neighbouring one.
+    const table = { course: this.runId, difficulty: this.difficultyName };
+    this.hud.showTitleBoard(await this.leaderboard.top(table, 3));
   }
 
   /**
@@ -277,11 +309,15 @@ export class Game {
       topSpeed: r.topSpeed,
       bestAir: r.longestAir,
       difficulty: this.difficultyName,
+      course: this._builtRunId,
       seed: this.course.seed ?? 0,
       finished,
     });
 
-    this.hud.showRunBoard(finished ? 'finish' : 'crash', result, presetInfo(this.difficultyName).label);
+    // Both halves of the split, so the table above the rows says which table
+    // it is: a Park score never competes with a Classic one.
+    const label = `${runInfo(this._builtRunId).name} · ${presetInfo(this.difficultyName).label}`;
+    this.hud.showRunBoard(finished ? 'finish' : 'crash', result, label);
     this._refreshTitleBoard();
     return result;
   }
@@ -291,6 +327,15 @@ export class Game {
     // inside the user gesture that got us here.
     this.audio.unlock();
     if (this.state === 'riding') return;
+    // A different mountain than the one standing has to be built, and a reload
+    // is how that is done — see the note in `Runs.stub.js`. The press is
+    // carried across it, so this reads as a slightly slower drop-in rather
+    // than as a button that did nothing.
+    if (this.runId !== this._builtRunId) {
+      armDropIn();
+      location.reload();
+      return;
+    }
     this.reset();
     this.state = 'riding';
     this.input.clear();
@@ -512,7 +557,9 @@ export class Game {
     this.lights.follow(this.rider.position);
 
     if (this.state === 'riding') {
-      this.hud.update(this.rider, this.elapsed, this.rider.position.z / COURSE.finishZ, this.score);
+      // The course's own finish line, not the module constant: with more than
+      // one run they are no longer the same number.
+      this.hud.update(this.rider, this.elapsed, this.rider.position.z / this.course.finishZ, this.score);
     }
 
     this.score.endFrame();
