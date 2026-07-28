@@ -12,7 +12,9 @@ import { buildRiderModel, solveTwoBone, RIG } from './RiderModel.js';
  * yaw rate scales with speed exactly like a real carve. Holding an arc scrubs
  * speed proportionally to how hard you're carving, so the fastest line is the
  * straightest one you can get away with. Off the groomer, the powder multiplies
- * drag and steals your edge grip.
+ * drag and steals your edge grip. And the snow gets a say in where you go: the
+ * cross-slope under the board tips you toward the local fall line unless you
+ * have an edge in to hold yourself across it.
  */
 
 const TUNING = {
@@ -58,6 +60,21 @@ const TUNING = {
 
   scrub: 0.055,           // speed lost to carving hard
   brakeScrub: 7.5,
+
+  // Gravity acting across the board on a laterally tilted surface: a yaw rate
+  // per unit of cross-slope, measured as rise over run, so this is the rad/s a
+  // flat-based rider gets at 45 degrees of bank.
+  //
+  // Set by the two ends it has to serve at once. The mountain as it stands has
+  // only gentle cross-slopes — the groomer's camber is 0.014 and the bowl that
+  // cradles the piste reaches 0.05 at the edge of the corduroy — so this puts
+  // under three degrees a second into the worst of them, against a carve that
+  // turns at sixty-five. You feel it as the piste holding you rather than as
+  // the board wandering. A purpose-built bank of 25 degrees reads as 0.47, and
+  // the same number there is thirty-six degrees of turn inside two seconds:
+  // unmistakably a turn, and pointed the way the hill falls.
+  bankDrift: 0.9,
+  bankEdgeHold: 0.85,     // fraction of the drift a fully committed edge resists
 
   ollie: 5.6,
   leaveSpeed: 1.2,        // m/s of separation before the board is truly airborne
@@ -261,6 +278,17 @@ export class Rider {
     this.tucking = input.tuck && this.grounded;
     this.braking = input.brake && this.grounded;
 
+    // The surface under the board, sampled once and used twice: the lateral
+    // component steers (section 2) and the forward component accelerates
+    // (section 3). It is sampled *here*, ahead of the yaw integration, rather
+    // than where it used to live down in section 3 — the normal depends only
+    // on position, which this frame has not moved yet, so hoisting it is free
+    // and gives section 2 a normal from this frame rather than the last one.
+    // The alternative (reusing the previous frame's `_normal`) would put a
+    // frame of lag into the one term that is supposed to feel immediate.
+    c.groundNormal(this.position.x, this.position.z, this._normal);
+    const n = this._normal;
+
     /* ---- 1. Edge angle: a spring, so turns carry momentum ---------- */
     // You cannot hold an edge you have no speed to hold it with. Without this,
     // a rider bogged down in powder still lies over at forty degrees.
@@ -303,6 +331,26 @@ export class Rider {
       // fades out as soon as there's enough speed to hold an edge.
       const pivot = 1 - clamp(this.speed / TUNING.pivotSpeed, 0, 1);
       this.yaw += input.steer * TUNING.pivotRate * pivot * dt;
+
+      // Banking: gravity across the length of the board.
+      //
+      // The two terms above only ever point the rider where they asked to go,
+      // so a tilted surface had no way of pushing them anywhere — you could
+      // traverse a wall sideways for ever. This is the missing channel: the
+      // cross-slope under the board, which is the sideways twin of the `slope`
+      // that section 3 turns into acceleration, tipping the nose toward the
+      // local fall line.
+      //
+      // Resisted by the edge, because an engaged edge is precisely what holds a
+      // rider across a slope — carve hard on a bank and you hold your line, run
+      // flat-based and it takes you down the hill. Airborne it does not apply
+      // (there is no surface), and a grind never reaches here at all: the
+      // grinding branch returns at the top of update(), and a rail is not snow.
+      const rx = Math.cos(this.yaw);
+      const rz = -Math.sin(this.yaw);
+      const bank = (n.x * rx + n.z * rz) / Math.max(n.y, 0.2);
+      const edgeHold = 1 - TUNING.bankEdgeHold * clamp(this.carveIntensity, 0, 1);
+      this.yaw += bank * TUNING.bankDrift * edgeHold * dt;
 
       if (this.pressing) {
         // Pressed, the board is free to swing. Nothing pulls it back to travel
@@ -353,8 +401,7 @@ export class Rider {
     }
 
     /* ---- 3. Longitudinal forces ----------------------------------- */
-    c.groundNormal(this.position.x, this.position.z, this._normal);
-    const n = this._normal;
+    // `n` is the surface normal sampled at the top of this method.
     const fx = Math.sin(this.yaw);
     const fz = Math.cos(this.yaw);
 
