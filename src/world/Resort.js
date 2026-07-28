@@ -76,7 +76,10 @@ function edgePoint(course, z, side, extra = 0) {
   const tan = course.trackTangent(z);
   const px = tan.z;
   const pz = -tan.x;
-  const u = side * (COURSE.trackHalfWidth + extra);
+  // Asked of the course at this z rather than read off the module-level view:
+  // the piste widens through a fork, and marker poles that carried on down the
+  // base half-width would run straight across the outer lane.
+  const u = side * (course.trackHalfWidthAt(z) + extra);
   return { x: course.centerX(z) + px * u, z: z + pz * u, px, pz };
 }
 

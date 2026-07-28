@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COURSE } from './Course.js';
+import { CLASSIC } from './Runs.js';
 import { SUN_DIRECTION } from './Environment.js';
 import { smoothstep } from '../core/mathx.js';
 
@@ -14,6 +14,23 @@ import { smoothstep } from '../core/mathx.js';
  *
  * The corduroy itself is drawn in the shader from the across-track coordinate,
  * so the grooming lines follow every bend of the piste exactly.
+ *
+ * ---------------------------------------------------------------------------
+ * Everything here comes from the `Course` instance it is handed
+ * ---------------------------------------------------------------------------
+ * This file used to read the module-level `COURSE` view at module scope and
+ * bake `trackHalfWidth` and `edgeSoftness` into GLSL source as literals. That
+ * only worked because exactly one course exists at a time and `Game.js` happens
+ * to build the terrain after it — and it stopped being *expressible* the moment
+ * a fork made the piste's width a function of z, since a baked constant cannot
+ * vary down the hill.
+ *
+ * So the width is no longer in the shader at all. Each vertex carries `aEdge` —
+ * its signed distance to the corduroy edge, in metres, negative on the piste —
+ * computed on the CPU from `course.trackHalfWidthAt(z)`. Every place the shader
+ * used to compare `abs(vU)` against a baked half-width now looks at that
+ * distance instead, which is correct whatever the width is doing, and the only
+ * scalar left is the edge softness, which is a real uniform.
  */
 
 // Groomed snow is white, not blue. The blue in a photograph of a piste is the
@@ -54,6 +71,21 @@ const TERRAIN_REACH = 620;
 /** Length of one frustum-cullable slice of slope, in metres. */
 const CHUNK_LENGTH = 190;
 
+/** Ordinary row spacing down the hill, in metres. */
+const ROW_STEP = 3.5;
+
+/**
+ * Rows per wavelength demanded of a mogul field.
+ *
+ * At the ordinary 3.5 m spacing a 12 m bump gets three and a bit samples and
+ * the mesh reconstructs it as a flattened triangle wave, several centimetres
+ * shallower than the height field the board is actually riding. Collision here
+ * is analytic and therefore exact, so any under-sampling shows up directly as
+ * the rider floating over the crests — which is the one thing this file's
+ * whole "one analytic height field" arrangement exists to prevent.
+ */
+const MOGUL_ROWS_PER_BUMP = 8;
+
 /**
  * Contact shading: how dark the snow goes right at the foot of something, and
  * how far out it reaches. Cheap, baked, and worth more than it looks — a tree
@@ -63,23 +95,28 @@ const AO_STRENGTH = 0.3;
 const AO_REACH = 2.4;
 
 export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
-  const offsets = buildOffsetColumns(quality.skirtStep ?? 28);
-  const zFrom = -70;
-  const zTo = COURSE.length + 420;
-  const dz = 3.5;
-  const rows = Math.ceil((zTo - zFrom) / dz) + 1;
+  const cfg = course.config;
+  const offsets = buildOffsetColumns(course, quality.skirtStep ?? 28);
+  const rowZs = buildRowZs(course);
+  const rows = rowZs.length;
   const cols = offsets.length;
 
   const count = rows * cols;
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
   const aU = new Float32Array(count);
+  // Signed metres from the corduroy edge, negative on the piste. This is what
+  // replaced the half-width baked into the shader — see the header.
+  const aEdge = new Float32Array(count);
+  // How much of the fork's divider is under this vertex, 0 to 1.
+  const aDiv = new Float32Array(count);
 
   const tangent = { x: 0, z: 1 };
   const color = new THREE.Color();
 
   for (let r = 0; r < rows; r++) {
-    const z0 = zFrom + r * dz;
+    const z0 = rowZs[r];
+    const halfWidth = course.trackHalfWidthAt(z0);
     const cx = course.centerX(z0);
     course.trackTangent(z0, tangent);
     // Perpendicular to the tangent, pointing to skier's right.
@@ -110,8 +147,17 @@ export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
 
       // Base tint: groomed blue on the piste, bright white out in the powder.
       const au = Math.abs(su);
-      const powder = smoothstep(COURSE.trackHalfWidth - COURSE.edgeSoftness, COURSE.trackHalfWidth + 2.5, au);
+      const edge = au - halfWidth;
+      const div = course.dividerMask(x, z);
+      aEdge[i] = edge;
+      aDiv[i] = div;
+
+      const powder = smoothstep(-cfg.track.edgeSoftness, 2.5, edge);
       color.copy(GROOMED_COLOR).lerp(POWDER_COLOR, powder);
+      // The fork's divider is untracked snow standing in the middle of the
+      // corduroy, and it has to look it — a ridge painted piste-blue reads as a
+      // lump in the piste rather than as the thing you have to choose a side of.
+      if (div > 0) color.lerp(POWDER_COLOR, div);
       // Very slight cooling far from the track keeps the eye on the line.
       color.lerp(SHADE_COLOR, smoothstep(60, 175, au) * 0.35);
 
@@ -141,12 +187,14 @@ export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
   // again for the shadow pass — when only a fraction is ever on screen.
   const group = new THREE.Group();
   group.name = 'slope';
-  const material = makeSnowMaterial();
-  const rowsPerChunk = Math.ceil(CHUNK_LENGTH / dz);
+  const material = makeSnowMaterial(course);
 
-  for (let start = 0; start < rows - 1; start += rowsPerChunk) {
+  // Chunk boundaries are found by walking z rather than counting rows, because
+  // the rows are not evenly spaced: a mogul field asks for finer ones.
+  for (let start = 0; start < rows - 1; ) {
+    let end = start + 1;
+    while (end < rows - 1 && rowZs[end] - rowZs[start] < CHUNK_LENGTH) end++;
     // Chunks share their boundary row, so there is no crack between them.
-    const end = Math.min(rows - 1, start + rowsPerChunk);
     const nRows = end - start + 1;
     const n = nRows * cols;
 
@@ -155,6 +203,8 @@ export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
     geometry.setAttribute('normal', new THREE.BufferAttribute(normals.slice(start * cols * 3, (start + nRows) * cols * 3), 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors.slice(start * cols * 3, (start + nRows) * cols * 3), 3));
     geometry.setAttribute('aU', new THREE.BufferAttribute(aU.slice(start * cols, (start + nRows) * cols), 1));
+    geometry.setAttribute('aEdge', new THREE.BufferAttribute(aEdge.slice(start * cols, (start + nRows) * cols), 1));
+    geometry.setAttribute('aDiv', new THREE.BufferAttribute(aDiv.slice(start * cols, (start + nRows) * cols), 1));
 
     const indices = [];
     for (let r = 0; r < nRows - 1; r++) {
@@ -171,9 +221,40 @@ export function buildTerrain(course, { quality = {}, occluders = null } = {}) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     group.add(mesh);
+
+    start = end;
   }
 
   return group;
+}
+
+/**
+ * The z of every row, from above the gate to past the end of the fall line.
+ *
+ * Evenly spaced, except over a mogul field, where the rows close up enough to
+ * resolve the bumps. The grid stays perfectly rectangular either way — the
+ * chunking and `computeGridNormals` both depend on that — because it is only
+ * the *spacing* that varies, never the number of columns in a row.
+ */
+function buildRowZs(course) {
+  const cfg = course.config;
+  const zFrom = -70;
+  const zTo = course.length + cfg.profileMargin;
+
+  const m = cfg.moguls;
+  const fine = m && m.enabled
+    // A metre of margin either side so the first and last bump are resolved too.
+    ? { from: m.z0 - 8, to: m.z3 + 8, step: Math.min(ROW_STEP, m.spacingZ / MOGUL_ROWS_PER_BUMP) }
+    : null;
+
+  const zs = [];
+  for (let z = zFrom; z <= zTo; ) {
+    zs.push(z);
+    z += fine && z >= fine.from && z < fine.to ? fine.step : ROW_STEP;
+  }
+  // One row past the end, so the last strip of triangles is a full one.
+  zs.push(zs[zs.length - 1] + ROW_STEP);
+  return zs;
 }
 
 /**
@@ -217,16 +298,23 @@ function computeGridNormals(positions, rows, cols) {
 /**
  * Column offsets: 1.5 m across the piste, opening up to a coarse skirt that
  * carries the snowfields out past the fog so the world never shows an edge.
+ *
+ * One set of columns serves every row, because the grid has to stay
+ * rectangular. So the fine band is sized for the *widest* the corduroy ever
+ * gets — through a fork, that is both lanes and the divider between them — and
+ * a run without a fork pays nothing for it.
  */
-function buildOffsetColumns(skirtStep) {
+function buildOffsetColumns(course, skirtStep) {
+  const cfg = course.config;
+  const fineTo = course.maxTrackHalfWidth() + 4;
   const half = [];
   let u = 0;
   while (u < TERRAIN_REACH) {
     half.push(u);
-    if (u < COURSE.trackHalfWidth + 4) u += 1.5;
+    if (u < fineTo) u += 1.5;
     else if (u < 42) u += 3;
     else if (u < 95) u += 6.5;
-    else if (u < COURSE.halfWidth) u += 12;
+    else if (u < cfg.halfWidth) u += 12;
     else u += skirtStep;
   }
   half.push(TERRAIN_REACH);
@@ -237,8 +325,16 @@ function buildOffsetColumns(skirtStep) {
 /**
  * Snow material: physically simple, stylistically specific.
  * Adds corduroy ridges on the piste and a faint sparkle in the powder.
+ *
+ * Takes the `Course` it is shading so the one remaining piste scalar — the
+ * softness of the corduroy edge — arrives as a uniform rather than as text
+ * spliced into the shader source. The half-width itself is not here at all any
+ * more; it varies with z, so it travels per-vertex as `aEdge`.
+ *
+ * The default keeps the export usable without a course to hand.
  */
-export function makeSnowMaterial(extra = {}) {
+export function makeSnowMaterial(course = null, extra = {}) {
+  const edgeSoftness = course?.edgeSoftness ?? CLASSIC.track.edgeSoftness;
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.88,
@@ -248,19 +344,26 @@ export function makeSnowMaterial(extra = {}) {
 
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uGroomDeep = { value: GROOMED_DEEP };
+    shader.uniforms.uEdgeSoft = { value: edgeSoftness };
 
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
         `#include <common>
          attribute float aU;
+         attribute float aEdge;
+         attribute float aDiv;
          varying float vU;
+         varying float vEdge;
+         varying float vDiv;
          varying vec3 vWorld;`
       )
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          vU = aU;
+         vEdge = aEdge;
+         vDiv = aDiv;
          vWorld = (modelMatrix * vec4(position, 1.0)).xyz;`
       );
 
@@ -269,14 +372,21 @@ export function makeSnowMaterial(extra = {}) {
         '#include <common>',
         `#include <common>
          varying float vU;
+         varying float vEdge;
+         varying float vDiv;
          varying vec3 vWorld;
          uniform vec3 uGroomDeep;
+         uniform float uEdgeSoft;
 
          const float CORD_PERIOD = ${CORDUROY_PERIOD.toFixed(3)};
          const float CORD_K = ${((Math.PI * 2) / CORDUROY_PERIOD).toFixed(5)};
 
-         float onPisteAt(float u) {
-           return 1.0 - smoothstep(${(COURSE.trackHalfWidth - COURSE.edgeSoftness).toFixed(2)}, ${COURSE.trackHalfWidth.toFixed(2)}, abs(u));
+         // How groomed this fragment is. vEdge is signed metres from the
+         // corduroy edge, so this is correct wherever the piste widens — and
+         // the fork's divider, which no groomer can climb, punches a hole
+         // straight through the middle of it.
+         float pisteAt() {
+           return (1.0 - smoothstep(-uEdgeSoft, 0.0, vEdge)) * (1.0 - vDiv);
          }
 
          // Fades the grooming out once a ridge is finer than a pixel, which is
@@ -327,7 +437,7 @@ export function makeSnowMaterial(extra = {}) {
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
          {
-           float onPiste = onPisteAt(vU);
+           float onPiste = pisteAt();
            float fade = cordFade(fwidth(vU)) * onPiste;
            if (fade > 0.001) {
              // World-space direction in which the across-track coordinate grows.
@@ -373,8 +483,7 @@ export function makeSnowMaterial(extra = {}) {
         '#include <color_fragment>',
         `#include <color_fragment>
          {
-           float au = abs(vU);
-           float onPiste = onPisteAt(vU);
+           float onPiste = pisteAt();
            float fade = cordFade(fwidth(vU));
 
            // A whisper of tone on top of the shaded ridges — the groomer packs
@@ -391,9 +500,18 @@ export function makeSnowMaterial(extra = {}) {
            sparkle = smoothstep(0.988, 1.0, sparkle) * (1.0 - onPiste) * near;
            diffuseColor.rgb += sparkle * 0.2;
 
-           // Groomer edge: a soft berm line where the corduroy meets the powder.
-           float edge = smoothstep(0.35, 0.0, abs(au - ${COURSE.trackHalfWidth.toFixed(2)}));
+           // Groomer edge: a soft berm line where the corduroy meets the powder,
+           // drawn from the per-vertex distance to that edge so it tracks the
+           // piste widening through a fork instead of sitting at a fixed width.
+           float edge = smoothstep(0.35, 0.0, abs(vEdge)) * (1.0 - vDiv);
            diffuseColor.rgb *= 1.0 - 0.04 * edge;
+
+           // And the same line again where the corduroy runs out against the
+           // foot of the fork's divider. Snow on snow is nearly contrastless in
+           // this light, and two drawn edges are what turn a pale swelling in
+           // the middle of the piste into a thing with two sides to it.
+           float foot = smoothstep(0.0, 0.2, vDiv) * smoothstep(0.6, 0.25, vDiv);
+           diffuseColor.rgb *= 1.0 - 0.05 * foot;
          }`
       )
       /*
@@ -452,7 +570,12 @@ export function makeSnowMaterial(extra = {}) {
       );
   };
 
-  // Any change to onBeforeCompile needs a distinct cache key.
-  material.customProgramCacheKey = () => 'alpine-snow-v6';
+  // Any change to onBeforeCompile needs a distinct cache key. v7 moved the
+  // piste width out of the source and into `aEdge`/`uEdgeSoft`; without the
+  // bump the old program is served straight back out of the cache and none of
+  // it takes effect.
+  // It stays one key across every run, which is the point of making the width
+  // data rather than source: two courses now share one compiled program.
+  material.customProgramCacheKey = () => 'alpine-snow-v7';
   return material;
 }
