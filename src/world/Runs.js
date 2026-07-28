@@ -318,6 +318,167 @@ export const CLASSIC = {
      * extra rng draws. Set `enabled: false` for a run with no spine.
      */
     hip: { enabled: true, atFraction: 0.5, angle: 0.36, minHalfWidth: 6.5, minLength: 10 },
+
+    /**
+     * ---------------------------------------------------------------------
+     * Shapes with a far side: step-downs and gap jumps
+     * ---------------------------------------------------------------------
+     * An ordinary kicker is a ramp and nothing else — past the lip the ground
+     * is whatever the terrain says it is. These two are ramps *plus a landing*,
+     * carried in the kicker's own height field rather than in the terrain:
+     * `groundHeight = terrainHeight + kickerHeight`, and the kicker field is
+     * free to describe as much of the far side as it likes. That is what lets a
+     * run place a step-down or a gap anywhere without the terrain knowing.
+     *
+     * ---------------------------------------------------------------------
+     * Why these are built *up* rather than dug down
+     * ---------------------------------------------------------------------
+     * `kickerHeight` may go negative — nothing stops it, and `groundHeight`
+     * handles it correctly. It is the *rendering* that cannot: `Terrain.js`
+     * meshes `terrainHeight` alone, as one opaque sheet, so any ground the
+     * kicker field puts below the terrain is behind that sheet and is simply
+     * not there to look at. An excavated landing rides fine and photographs as
+     * unbroken snow, with the rider sinking into it. (Checked, with pictures,
+     * before this was written the other way round.)
+     *
+     * So the drop is made by raising the take-off rather than by sinking the
+     * landing. `lift` is a deck the whole feature stands on, reached over an
+     * `approach` roll-in behind the ramp; the landing then steps back *down* to
+     * the natural snow. What the rider feels is the height of the lip above
+     * where they touch down, and that is the same either way — but this way
+     * every surface they can see or ride is at or above the terrain.
+     *
+     * ---------------------------------------------------------------------
+     * The `landing` chain
+     * ---------------------------------------------------------------------
+     * Both shapes are described by the same field: a list of segments walked
+     * outward from the lip. Each eases from wherever the previous one finished
+     * to `to` over `run` metres, with a smoothstep, so every joint has zero
+     * gradient and the surface normal never steps. `to` is metres above the
+     * natural snow; the chain starts at `lift` (the deck, immediately past the
+     * lip) and should finish at 0, back onto the terrain, so the feature ends.
+     *
+     *   step-down  hold the deck, then step off it:   [lift, 0]
+     *   gap        off the deck into the void, over
+     *              the landing lip, away down its
+     *              back:                              [0, +crest, 0]
+     *
+     * Two rules keep a landing ridable, and both are asserted in
+     * `tools/check-mechanics.mjs`:
+     *
+     *   1. A segment's steepest gradient is `1.5 * |rise| / run` — the peak of
+     *      a smoothstep. Every *climbing* segment (the roll-in, and a gap's
+     *      landing lip) must stay under the run's local `grade`, or the feature
+     *      contains a real hill and a rider who cases the gap is stranded at
+     *      the bottom of it. Classic's grade is 0.17 at rest and about 0.24
+     *      through the steeper pitches; a flatter run needs gentler numbers.
+     *   2. The whole thing is a fall-line feature: nothing here steers, so it
+     *      has to be wide enough to catch a rider who drifted on the way in.
+     *      Hence `widthScale` — deck and landing are wider than the ramp — and
+     *      `edgeBlend`, a long lateral taper rather than the ramp's short one,
+     *      because a 4 m deck tapering over 2.6 m is a wall down each side.
+     *
+     * `atFraction` promotes whichever ordinary kicker lands nearest
+     * `finishZ * atFraction`, exactly as `hip` does, so enabling one costs no
+     * extra rng draws and moves no other feature. The promoted kicker is
+     * recentred on the track: these are signature obstacles, and being handed a
+     * gap jump tucked against the treeline is a different game.
+     */
+
+    /**
+     * Step-down: a raised take-off, a deck running on past the lip, and then
+     * the ground dropping away to the snow.
+     *
+     * The drop is what buys the hang time, and the transition is placed where
+     * a committed rider actually touches down. Hang back and you land on the
+     * flat of the deck or on the shallow top of the step and get bucked;
+     * commit, and the face is running away from you at close to your own
+     * flight angle and you keep nearly all of your speed.
+     *
+     * Fitted to the `cruise` tuning, which is what the game ships on: the lip
+     * speeds a step-down has to serve span 19 to 35 m/s across the two
+     * tunings, and 26 m of transition cannot cover the 44 m of landing spread
+     * that implies. Flat out on `original` you over-jump it and land on the
+     * flat past it, for about thirty per cent of your speed — which is what
+     * over-jumping a landing costs, and it is still a landing.
+     */
+    stepDown: {
+      enabled: false,
+      /** Promoted from the ordinary kicker nearest `finishZ * atFraction`. */
+      atFraction: 0.34,
+      /**
+       * Floors applied to the promoted kicker, so the shape is never a stub.
+       *
+       * `minHeight / minLength` is steeper than any ordinary kicker on Classic
+       * reaches (0.34 against 0.30), and it has to be: the ramp's gradient at
+       * the lip is what converts speed into loft, and a step-down that hangs no
+       * longer than the kicker two hundred metres up the hill is only a kicker
+       * with a view.
+       */
+      minHeight: 3.4,
+      minLength: 10,
+      minHalfWidth: 6.5,
+      /** Height of the deck the take-off stands on, above the natural snow. */
+      lift: 3.8,
+      /**
+       * Metres of roll-in behind the ramp's foot, from the snow up onto the
+       * deck. Long enough that its steepest gradient — `1.5 * lift / approach`
+       * — stays under the run's grade, so riding onto the deck never costs a
+       * climb.
+       */
+      approach: 28,
+      /**
+       * Deck and landing half-width, as a multiple of the ramp's. The flat of
+       * the deck is `halfWidth * widthScale - edgeBlend`, and that has to be at
+       * least the ramp's own half-width or the ramp overhangs the deck's flank.
+       */
+      widthScale: 2.0,
+      /** Metres of lateral taper at the deck's and the landing's edges. */
+      edgeBlend: 6,
+      /** @type {{ run: number, to: number }[]} */
+      landing: [
+        { run: 14, to: 3.8 },   // the deck runs on past the lip: the knuckle
+        { run: 26, to: 0 },     // and then steps down to the snow
+      ],
+    },
+
+    /**
+     * Gap jump: take-off, a real void, and a landing lip on the far side.
+     *
+     * The void is the stretch where the deck has ended and the landing has not
+     * begun: natural snow, nearly four metres below the crest of the landing
+     * and over seven below the lip you left. Its floor and the landing's near
+     * face are one continuous smoothstep, and that is the whole
+     * safety story: a rider who comes up short lands in the trough and rides
+     * back up out of it, losing speed and flow but nothing else. There is no
+     * wall to hit, because in this game almost nothing but a tree square on
+     * ends a run.
+     */
+    gap: {
+      enabled: false,
+      atFraction: 0.68,
+      minHeight: 3.4,
+      minLength: 11,
+      minHalfWidth: 6.5,
+      lift: 3.8,
+      approach: 28,
+      widthScale: 2.0,
+      edgeBlend: 6,
+      /**
+       * @type {{ run: number, to: number }[]}
+       * The gap proper is the first two segments — 22 m from the lip to the
+       * crest of the landing. That number is the whole design, and it is set
+       * by what the rider can actually reach at the speed the piste gives
+       * them, measured rather than guessed. See the gap jump block at the end
+       * of `tools/check-mechanics.mjs` for the air off this take-off and the
+       * margin by which it clears the crest on both tunings.
+       */
+      landing: [
+        { run: 8, to: 0 },      // off the deck into the void
+        { run: 14, to: 3.8 },   // up over the landing lip
+        { run: 28, to: 0 },     // and away down its back
+      ],
+    },
   },
 
   /* --- rails ------------------------------------------------------------ */

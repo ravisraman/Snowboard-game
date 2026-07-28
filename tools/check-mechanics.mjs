@@ -1347,6 +1347,193 @@ const results = await page.evaluate(() => {
       out.mogulRun.reliefM = +(hi - lo).toFixed(2);
     }
   }
+  /* ==================================================================
+   * FAR-SIDE KICKERS — step-downs and gap jumps.
+   *
+   * Everything from here to `return out` belongs to one change: a kicker
+   * may now carry a *deck* — a raised take-off with a roll-in behind it and
+   * a landing stepping back down to the snow in front. Kept in one
+   * contiguous block at the end of the measurement section so it reads as
+   * the single addition it is, and matched by one contiguous block at the
+   * end of `checks`.
+   *
+   * Both shapes are off on Classic, so none of this can be measured on the
+   * course the rest of the file rides. A second course is built here with
+   * them switched on. `structuredClone` of the run in play stands in for
+   * `defineRun` — this callback is synchronous and cannot import — and for
+   * an override this shallow the two are the same thing.
+   * ================================================================ */
+  {
+    const preset = structuredClone(c.config);
+    preset.id = 'harness-far-side';
+    preset.name = 'Harness Far Side';
+    preset.kickers.stepDown.enabled = true;
+    preset.kickers.gap.enabled = true;
+
+    const park = new (c.constructor)(c.seed, preset);
+    const sd = park.kickers.find((k) => k.stepDown);
+    const gp = park.kickers.find((k) => k.gap);
+    const realCourse = r.course;
+    r.course = park;
+
+    /** Along-track distance of a world position from a kicker's foot. */
+    const along = (k, p) => (p.x - k.x) * k.dirX + (p.z - k.z) * k.dirZ;
+
+    /**
+     * Rides straight at `k` from `runup` metres back, entering at `speed`, and
+     * reports what the jump did. Every distance is measured from the *lip*,
+     * which is the only place on the feature a rider can point at.
+     *
+     * Held for six seconds past touchdown as well: the question a landing has
+     * to answer is not only "did that hurt" but "am I still going", and a
+     * trough you can land in but not ride out of would pass the first.
+     */
+    const jump = (k, speed, runup) => {
+      r.reset();
+      r.position.set(k.x - k.dirX * runup, 0, k.z - k.dirZ * runup);
+      r.yaw = Math.atan2(k.dirX, k.dirZ);
+      r.speed = speed;
+      r.settle();
+      let lip = null;
+      let land = null;
+      let air = 0;
+      let after = 0;
+      let slowest = Infinity;
+      for (let i = 0; i < 120 * 20; i++) {
+        const wasGrounded = r.grounded;
+        r.update(dt, NONE);
+        const s = along(k, r.position);
+        if (wasGrounded && !r.grounded && !lip && s > k.length * 0.5) {
+          lip = { s, y: r.position.y, speed: r.speed };
+        }
+        if (!r.grounded) air = Math.max(air, r.airTime);
+        if (lip && !wasGrounded && r.grounded && !land) {
+          land = { s, y: r.position.y, speed: r.speed, air };
+        }
+        if (land) {
+          after += dt;
+          slowest = Math.min(slowest, r.speed);
+          if (after > 6) break;
+        }
+      }
+      return {
+        launched: !!lip,
+        lipSpeed: lip ? +lip.speed.toFixed(1) : 0,
+        landedAt: land ? +(land.s - k.length).toFixed(1) : null,
+        dropM: lip && land ? +(lip.y - land.y).toFixed(1) : 0,
+        airSeconds: land ? +land.air.toFixed(2) : +air.toFixed(2),
+        landSpeed: land ? +land.speed.toFixed(1) : 0,
+        kept: lip && land ? +(land.speed / lip.speed).toFixed(2) : 0,
+        slowestAfter: slowest === Infinity ? 0 : +slowest.toFixed(1),
+        speedAfter6s: +r.speed.toFixed(1),
+        crashed: r.crashed,
+        stillRiding: !r.crashed && r.speed > 1,
+      };
+    };
+
+    /**
+     * Worst `groundNormal().y` along a kicker's centre line, sampled every
+     * 25 cm over the whole feature — roll-in, ramp, lip and landing.
+     *
+     * Reported twice: including the lip, and excluding a metre and a half
+     * either side of it. Every kicker in the game already has one
+     * discontinuity, the lip itself, and it is the point of a kicker; what
+     * would be a bug is a *second* one out on the far side, where the rider is
+     * trying to land.
+     */
+    const centreLine = (course, k) => {
+      const deck = k.deck;
+      const from = -(deck ? deck.approach : 6) - 10;
+      const to = k.length + (deck ? deck.length : 0) + 10;
+      let worst = 1;
+      let worstAt = 0;
+      let worstAway = 1;
+      let awayAt = 0;
+      let climb = -1;          // steepest *uphill* metre on the far side
+      let climbAt = 0;
+      for (let s = from; s <= to; s += 0.25) {
+        const x = k.x + k.dirX * s;
+        const z = k.z + k.dirZ * s;
+        const n = course.groundNormal(x, z);
+        if (n.y < worst) { worst = n.y; worstAt = s - k.length; }
+        if (Math.abs(s - k.length) > 1.5 && n.y < worstAway) { worstAway = n.y; awayAt = s - k.length; }
+        // The ramp is meant to climb; everywhere else, a climb is something
+        // the rider may have to get up with whatever speed the crash left them.
+        if (s < -0.5 || s > k.length + 0.5) {
+          const back = course.groundHeight(k.x + k.dirX * (s - 0.5), k.z + k.dirZ * (s - 0.5));
+          const fwd = course.groundHeight(k.x + k.dirX * (s + 0.5), k.z + k.dirZ * (s + 0.5));
+          if (fwd - back > climb) { climb = fwd - back; climbAt = s - k.length; }
+        }
+      }
+      return {
+        worstNormalY: +worst.toFixed(3), worstAt: +worstAt.toFixed(1),
+        worstAwayFromLip: +worstAway.toFixed(3), awayAt: +awayAt.toFixed(1),
+        steepestClimb: +climb.toFixed(3), climbAt: +climbAt.toFixed(1),
+      };
+    };
+
+    // The same measurement over every plain kicker on Classic, as the bar the
+    // two new shapes have to clear: they may not put a worse crease in the
+    // ground than the ramps the game already ships.
+    let plainWorst = 1;
+    for (const k of c.kickers) {
+      for (let s = -8; s <= k.length + 10; s += 0.25) {
+        const n = c.groundNormal(k.x + k.dirX * s, k.z + k.dirZ * s);
+        if (n.y < plainWorst) plainWorst = n.y;
+      }
+    }
+
+    // Best air an ordinary kicker on this course gives from the same approach,
+    // so "longer hang time" is a comparison rather than an adjective.
+    const plainKickers = park.kickers.filter((k) => !k.deck);
+
+    const shapes = {};
+    for (const tuning of ['cruise', 'original']) {
+      g.setDifficulty(tuning);
+      let plainAir = 0;
+      let plainAirFlatOut = 0;
+      for (const k of plainKickers) {
+        plainAir = Math.max(plainAir, jump(k, 20, 45).airSeconds);
+        plainAirFlatOut = Math.max(plainAirFlatOut, jump(k, 40, 45).airSeconds);
+      }
+      shapes[tuning] = {
+        // 20 m/s into the roll-in is 72 km/h — a rider who is going, but not
+        // one who has done anything clever about it.
+        stepDown: jump(sd, 20, 45),
+        gap: jump(gp, 20, 45),
+        // And flat out: the piste's own terminal speed, whatever the tuning
+        // makes that.
+        gapFlatOut: jump(gp, 40, 45),
+        stepDownFlatOut: jump(sd, 40, 45),
+        // Rolling in at 10 m/s, which on either tuning arrives at the lip too
+        // slow to make it across.
+        gapCased: jump(gp, 10, 24),
+        plainAir: +plainAir.toFixed(2),
+        plainAirFlatOut: +plainAirFlatOut.toFixed(2),
+      };
+    }
+    g.setDifficulty('original');
+
+    r.course = realCourse;
+    // `COURSE` is a module-level view of the last course constructed; put it
+    // back on the run the rest of this file is riding.
+    new (c.constructor)(c.seed, c.config);
+
+    out.farSide = {
+      // Where the landing's crest sits, in metres past the lip — the distance
+      // a gap jump is asking to be cleared.
+      gapCrestM: gp.deck.segments[1].end,
+      stepDeckM: sd.deck.segments[0].end,
+      liftM: sd.deck.lift,
+      lipAboveSnowM: +(sd.deck.lift + sd.height).toFixed(1),
+      classicPlainWorstNormalY: +plainWorst.toFixed(3),
+      stepDownLine: centreLine(park, sd),
+      gapLine: centreLine(park, gp),
+      ...shapes,
+      // Classic must not have grown either shape by having them defined.
+      classicHasNeither: !c.kickers.some((k) => k.deck || k.stepDown || k.gap),
+    };
+  }
 
   return out;
 });
@@ -2562,6 +2749,171 @@ const checks = [
   ['and the bumps are actually there',
     results.mogulRun.reliefM > 0.8 && results.mogulRun.reliefM < 3,
     `${results.mogulRun.reliefM} m crest to trough`],
+  /* ==================================================================
+   * FAR-SIDE KICKERS — step-downs and gap jumps. One contiguous block,
+   * matching the measurement block at the end of the page evaluation.
+   *
+   * Both shapes are a raised take-off deck plus a landing, carried in the
+   * kicker's own height field. Both are off on Classic — the three digest
+   * checks above are what says so — and everything here is measured on a
+   * second course with them switched on.
+   * ================================================================ */
+
+  ['neither new shape appears on Classic', results.farSide.classicHasNeither,
+    `deck ${results.farSide.liftM} m, lip ${results.farSide.lipAboveSnowM} m above the snow when enabled`],
+
+  /* ---- The step-down -----------------------------------------------
+   *
+   * The point of it is the drop. A rider rolling in at 72 km/h leaves a lip
+   * nearly seven metres above the snow, and the ground has stepped down and
+   * run away from them by the time they meet it again — so they land a long
+   * way below where they left, and they are in the air for longer doing it
+   * than any ordinary kicker on the same course would give them.
+   * ------------------------------------------------------------- */
+
+  ['a step-down launches the rider and lands them well below take-off',
+    results.farSide.cruise.stepDown.launched &&
+    results.farSide.cruise.stepDown.dropM > 8 &&
+    results.farSide.cruise.stepDown.landedAt > 18 &&
+    !results.farSide.cruise.stepDown.crashed,
+    `cruise: ${results.farSide.cruise.stepDown.dropM} m down, ` +
+    `landing ${results.farSide.cruise.stepDown.landedAt} m past the lip ` +
+    `(original ${results.farSide.original.stepDown.dropM} m / ${results.farSide.original.stepDown.landedAt} m)`],
+
+  // Against the best of the eleven ordinary kickers on the same course, ridden
+  // the same way — an absolute number would only be measuring the tuning.
+  ['a step-down hangs longer than any ordinary kicker on the same course',
+    ['cruise', 'original'].every((t) =>
+      results.farSide[t].stepDown.airSeconds > results.farSide[t].plainAir + 0.12 &&
+      results.farSide[t].stepDownFlatOut.airSeconds > results.farSide[t].plainAirFlatOut + 0.12),
+    ['cruise', 'original'].map((t) =>
+      `${t} ${results.farSide[t].stepDown.airSeconds}s vs ${results.farSide[t].plainAir}s at 72 km/h, ` +
+      `${results.farSide[t].stepDownFlatOut.airSeconds}s vs ${results.farSide[t].plainAirFlatOut}s flat out`).join('; ')],
+
+  /*
+   * Committing has to buy something, or the shape is a tax on confidence.
+   * Every extra metre per second off the lip is more distance, more drop and
+   * more air, and the step keeps running away from you the whole time, so at
+   * the speeds the game ships at the landing still holds your speed too.
+   *
+   * There is a ceiling on that, and it is named rather than hidden. The step
+   * is 26 m of transition and the lip speeds it has to serve span 19 to 35 m/s
+   * — no single face covers 44 m of landing spread. It is fitted to cruise,
+   * which is the tuning the game ships on and the one a park run will be
+   * ridden with; flat out on `original`, at 126 km/h, you over-jump the whole
+   * thing and land on the flat past it, and pay about thirty per cent for it.
+   * That is what over-jumping a landing is supposed to cost. It is still a
+   * landing — no stumble, no crash — which is the part that matters here.
+   */
+  ['a step-down pays for committing to it',
+    ['cruise', 'original'].every((t) => {
+      const easy = results.farSide[t].stepDown;
+      const hard = results.farSide[t].stepDownFlatOut;
+      return hard.landedAt > easy.landedAt + 4 && hard.dropM > easy.dropM + 2 &&
+        hard.airSeconds > easy.airSeconds + 0.1 && !hard.crashed && hard.stillRiding &&
+        hard.kept > (t === 'cruise' ? 0.85 : 0.6);
+    }),
+    ['cruise', 'original'].map((t) => {
+      const easy = results.farSide[t].stepDown;
+      const hard = results.farSide[t].stepDownFlatOut;
+      return `${t}: ${easy.landedAt}m/${easy.dropM}m/${easy.airSeconds}s keeping ` +
+        `${Math.round(easy.kept * 100)}% -> flat out ${hard.landedAt}m/${hard.dropM}m/` +
+        `${hard.airSeconds}s keeping ${Math.round(hard.kept * 100)}%`;
+    }).join('; ')],
+
+  /* ---- The gap ------------------------------------------------------
+   *
+   * The whole design is one number: how far past the lip the landing's crest
+   * sits. Measured rather than guessed — the achievable air off this take-off
+   * was measured first and the crest put inside it, with margin, on the
+   * tuning the game actually ships on.
+   *
+   *   crest              22 m past the lip
+   *   cruise, 72 km/h    touches down ~26 m out — clears by ~4 m
+   *   cruise, flat out   touches down ~31 m out — clears by ~9 m
+   *   original, 72 km/h  touches down ~32 m out — clears by ~10 m
+   *
+   * The bounds below are the shape of that, not the digits: what must hold is
+   * that an ordinary committed approach clears it on *both* tunings, and that
+   * flat out has room to spare.
+   * ------------------------------------------------------------- */
+
+  ['a gap jump is clearable at a realistic approach speed',
+    results.farSide.cruise.gap.landedAt > results.farSide.gapCrestM + 2 &&
+    results.farSide.original.gap.landedAt > results.farSide.gapCrestM + 2,
+    `crest at ${results.farSide.gapCrestM} m; cruise leaves the lip at ` +
+    `${results.farSide.cruise.gap.lipSpeed} m/s and lands ${results.farSide.cruise.gap.landedAt} m out ` +
+    `(+${(results.farSide.cruise.gap.landedAt - results.farSide.gapCrestM).toFixed(1)} m), ` +
+    `original at ${results.farSide.original.gap.lipSpeed} m/s lands ${results.farSide.original.gap.landedAt} m out ` +
+    `(+${(results.farSide.original.gap.landedAt - results.farSide.gapCrestM).toFixed(1)} m)`],
+
+  ['a gap jump has room to spare at full piste speed',
+    results.farSide.cruise.gapFlatOut.landedAt > results.farSide.gapCrestM + 6 &&
+    results.farSide.original.gapFlatOut.landedAt > results.farSide.gapCrestM + 6 &&
+    results.farSide.cruise.gapFlatOut.kept > 0.9,
+    `cruise +${(results.farSide.cruise.gapFlatOut.landedAt - results.farSide.gapCrestM).toFixed(1)} m ` +
+    `keeping ${Math.round(results.farSide.cruise.gapFlatOut.kept * 100)}%, ` +
+    `original +${(results.farSide.original.gapFlatOut.landedAt - results.farSide.gapCrestM).toFixed(1)} m`],
+
+  // The other half of the same design. A gap that cannot be failed is not a
+  // gap; a gap that ends the run for failing it is a trap, and on this
+  // mountain almost nothing but a tree square on ends a run. Coming up short
+  // drops you into the trough, costs you most of your speed, and leaves you
+  // riding out the far side of it.
+  ['coming up short on a gap costs speed and flow, never the run',
+    ['cruise', 'original'].every((t) => {
+      const cased = results.farSide[t].gapCased;
+      return cased.landedAt < results.farSide.gapCrestM &&
+        cased.kept < 0.75 && !cased.crashed && cased.stillRiding && cased.speedAfter6s > 8;
+    }),
+    ['cruise', 'original'].map((t) => {
+      const cased = results.farSide[t].gapCased;
+      return `${t}: lip ${cased.lipSpeed} m/s -> down at ${cased.landedAt} m ` +
+        `(${(results.farSide.gapCrestM - cased.landedAt).toFixed(1)} m short), slowed to ` +
+        `${cased.slowestAfter} m/s, still riding at ${cased.speedAfter6s} m/s`;
+    }).join('; ')],
+
+  /* ---- The ground itself --------------------------------------------
+   *
+   * `groundNormal` takes central differences at 0.6 m, so anything that steps
+   * inside a metre and a bit reads as a near-vertical wall and throws the
+   * rider. Every kicker in the game has exactly one such step — the lip — and
+   * that is deliberate. These two shapes are long, and the whole of their far
+   * side is new ground, so it is sampled every 25 cm end to end.
+   * ------------------------------------------------------------- */
+
+  // The bound is 0.22, which is a surface running at 77 degrees to the
+  // vertical — steep, and exactly as steep as a lip is supposed to be. Both
+  // shapes reach it in the same place Classic's kickers reach theirs (0.26):
+  // at the lip, and nowhere else. Theirs sit a fraction higher because these
+  // two ramps are deliberately steeper than any on Classic, which is where
+  // their extra hang time comes from.
+  ['the normal never spikes anywhere along either new shape',
+    results.farSide.stepDownLine.worstNormalY > 0.22 &&
+    results.farSide.gapLine.worstNormalY > 0.22 &&
+    Math.abs(results.farSide.stepDownLine.worstAt) < 1 &&
+    Math.abs(results.farSide.gapLine.worstAt) < 1,
+    `worst normal.y: step-down ${results.farSide.stepDownLine.worstNormalY} at ` +
+    `${results.farSide.stepDownLine.worstAt} m, gap ${results.farSide.gapLine.worstNormalY} at ` +
+    `${results.farSide.gapLine.worstAt} m — both at the lip; Classic's own kickers reach ` +
+    `${results.farSide.classicPlainWorstNormalY}`],
+
+  ['away from the lip, both shapes stay smooth under the board',
+    results.farSide.stepDownLine.worstAwayFromLip > 0.6 &&
+    results.farSide.gapLine.worstAwayFromLip > 0.6,
+    `worst normal.y off the lip: step-down ${results.farSide.stepDownLine.worstAwayFromLip} ` +
+    `at ${results.farSide.stepDownLine.awayAt} m, gap ${results.farSide.gapLine.worstAwayFromLip} ` +
+    `at ${results.farSide.gapLine.awayAt} m`],
+
+  // And nothing on either far side is a hill. A rider who cases the gap is in
+  // the trough with almost no speed left, so the climb out of it has to be
+  // something the pitch itself will carry them up.
+  ['nothing on either far side is a climb the rider cannot ride out of',
+    results.farSide.stepDownLine.steepestClimb < 0.3 && results.farSide.gapLine.steepestClimb < 0.3,
+    `steepest metre: step-down ${results.farSide.stepDownLine.steepestClimb} at ` +
+    `${results.farSide.stepDownLine.climbAt} m, gap ${results.farSide.gapLine.steepestClimb} at ` +
+    `${results.farSide.gapLine.climbAt} m`],
+  /* ================= END far-side kickers =========================== */
 ];
 
 console.log(JSON.stringify(results, null, 2));

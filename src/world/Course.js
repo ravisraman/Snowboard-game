@@ -414,14 +414,78 @@ export class Course {
       spine.halfWidth = Math.max(spine.halfWidth, cfg.hip.minHalfWidth);
       spine.length = Math.max(spine.length, cfg.hip.minLength);
     }
+
+    // Two more signature shapes, promoted the same way. A step-down and a gap
+    // jump are both an ordinary ramp with a *far side*: a raised deck the ramp
+    // stands on, and a landing that steps back down off it — all of it carried
+    // in the kicker's own height field. See the `stepDown`/`gap` commentary in
+    // `Runs.js` for what the numbers mean, and `kickerProfile()` below for how
+    // the deck is evaluated.
+    this._promoteDeck(cfg.stepDown, 'stepDown');
+    this._promoteDeck(cfg.gap, 'gap');
   }
 
-  /** Bucket kickers by z so the per-frame height lookup stays O(1). */
+  /**
+   * Turns the kicker nearest `finishZ * atFraction` into a shape with a deck.
+   *
+   * Recentred on the track and given floors on its ramp, because these are the
+   * obstacles a run is built around: one that happened to be drawn small and
+   * pushed against the treeline would not read as the feature it is. It still
+   * costs no extra rng draws, so enabling one moves nothing else on the
+   * mountain.
+   */
+  _promoteDeck(spec, flag) {
+    if (!spec?.enabled || !this.kickers.length) return null;
+    const target = this.finishZ * spec.atFraction;
+    let k = this.kickers[0];
+    for (const c of this.kickers) {
+      if (Math.abs(c.z - target) < Math.abs(k.z - target)) k = c;
+    }
+
+    k[flag] = true;
+    k.x = this.centerX(k.z);
+    k.height = Math.max(k.height, spec.minHeight);
+    k.length = Math.max(k.length, spec.minLength);
+    k.halfWidth = Math.max(k.halfWidth, spec.minHalfWidth);
+
+    // The deck and the landing, pre-resolved into absolute heights above the
+    // terrain so the profile does no more than pick a segment and interpolate.
+    // `at` is the distance past the lip at which a segment ends.
+    let at = 0;
+    let from = spec.lift;
+    const segments = spec.landing.map((seg) => {
+      const s = { start: at, end: at + seg.run, from, to: seg.to };
+      at = s.end;
+      from = seg.to;
+      return s;
+    });
+    k.deck = {
+      lift: spec.lift,
+      approach: spec.approach,
+      rampLength: k.length,
+      segments,
+      length: at,
+      halfWidth: k.halfWidth * spec.widthScale,
+      edgeBlend: spec.edgeBlend,
+    };
+    return k;
+  }
+
+  /**
+   * Bucket kickers by z so the per-frame height lookup stays O(1).
+   *
+   * The reach has to span the *whole* feature — roll-in, ramp and landing. A
+   * kicker bucketed only over its ramp would have its deck silently truncated
+   * at a bucket boundary: the height field would step by metres in the middle
+   * of a jump, which is far worse than the cost of a slightly wider index.
+   */
   _indexKickers() {
     this._kickerBucketSize = 64;
     this._kickerBuckets = new Map();
     for (const k of this.kickers) {
-      const reach = k.length + k.halfWidth + 4;
+      const deck = k.deck;
+      const reach = k.length + (deck ? deck.length + deck.approach : 0) +
+        Math.max(k.halfWidth, deck?.halfWidth ?? 0) + 4;
       const from = Math.floor((k.z - reach) / this._kickerBucketSize);
       const to = Math.floor((k.z + reach) / this._kickerBucketSize);
       for (let b = from; b <= to; b++) {
@@ -445,6 +509,20 @@ export class Course {
    * launches you — differs depending on which half you rode up. Nothing else
    * about it is special: it is still sampled by the same mesh builder and
    * read by the same physics as an ordinary kicker.
+   *
+   * A `stepDown` or `gap` kicker keeps that ramp exactly as it is and adds a
+   * *deck* underneath it: a raised platform, reached over a roll-in behind the
+   * ramp's foot, which continues past the lip and then steps back down to the
+   * snow along the `landing` chain. Deck and ramp are two independent terms
+   * summed here, with their own widths, so the ramp is a wedge sitting on a
+   * wider table rather than a wedge with a table welded to its sides.
+   *
+   * The chain is one evaluator for both shapes — a step-down holds the deck
+   * and steps off it, a gap drops into a void and climbs a landing lip — so
+   * they differ only in the numbers `Runs.js` hands them. Zero gradient at
+   * every joint is what keeps `groundNormal`'s central differences from
+   * stepping anywhere along the feature; the one discontinuity in the whole
+   * thing is the lip itself, which is the point of a kicker.
    */
   kickerProfile(k, x, z) {
     const dx = x - k.x;
@@ -462,17 +540,49 @@ export class Course {
     }
 
     const s = dx * dirX + dz * dirZ;           // along the ramp
-    if (s < 0 || s > k.length) return 0;
     const t = dx * dirZ - dz * dirX;           // across the ramp
     const at = Math.abs(t);
-    if (at > k.halfWidth) return 0;
-
     const cfg = this.config.kickers;
-    const p = s / k.length;
-    // Steepest right at the lip: that is what converts speed into loft.
-    const rise = Math.pow(p, cfg.rampExponent);
-    const across = 1 - smoothstep(k.halfWidth - cfg.edgeBlend, k.halfWidth, at);
-    return k.height * rise * across;
+
+    let h = 0;
+    if (s >= 0 && s <= k.length && at <= k.halfWidth) {
+      const p = s / k.length;
+      // Steepest right at the lip: that is what converts speed into loft.
+      const rise = Math.pow(p, cfg.rampExponent);
+      const across = 1 - smoothstep(k.halfWidth - cfg.edgeBlend, k.halfWidth, at);
+      h = k.height * rise * across;
+    }
+
+    const deck = k.deck;
+    if (!deck || at > deck.halfWidth) return h;
+    return h + this._deckHeight(deck, s - k.length) *
+      (1 - smoothstep(deck.halfWidth - deck.edgeBlend, deck.halfWidth, at));
+  }
+
+  /**
+   * The deck under a step-down or a gap, as a function of distance past the
+   * lip.
+   *
+   * Behind the lip it is the roll-in easing from the snow up to `lift`, and
+   * then the flat of the deck under the ramp itself. Past the lip it walks the
+   * `landing` chain, one smoothstep per segment. Everything outside the
+   * feature is 0, which is the terrain, so the whole thing joins the mountain
+   * flush at both ends.
+   */
+  _deckHeight(deck, u) {
+    if (u <= -deck.rampLength) {
+      // The roll-in. Its foot is `approach` metres behind the ramp's foot.
+      return deck.lift * smoothstep(-deck.rampLength - deck.approach, -deck.rampLength, u);
+    }
+    if (u <= 0) return deck.lift;
+    if (u >= deck.length) return 0;
+    // Which segment `u` falls in. There are two or three, so a scan beats
+    // anything cleverer.
+    let seg = deck.segments[deck.segments.length - 1];
+    for (const c of deck.segments) {
+      if (u < c.end) { seg = c; break; }
+    }
+    return seg.from + (seg.to - seg.from) * smoothstep(seg.start, seg.end, u);
   }
 
   /** Combined kicker contribution at a world position. */
@@ -503,7 +613,14 @@ export class Course {
     return best;
   }
 
-  /** True when a position is on (or very near) a kicker ramp — used by scatter placement. */
+  /**
+   * True when a position is on (or very near) a kicker — used by scatter
+   * placement to keep trees, rails and stars off a ramp.
+   *
+   * The deck counts, roll-in and landing and all. A tree in the run-out of a
+   * gap jump is the one thing on this mountain that ends a run, planted at the
+   * exact spot where the rider has no say in where they are going.
+   */
   onKicker(x, z, pad = 3) {
     const near = this.kickersNear(z);
     for (const k of near) {
@@ -512,6 +629,9 @@ export class Course {
       const s = dx * k.dirX + dz * k.dirZ;
       const t = dx * k.dirZ - dz * k.dirX;
       if (s > -pad && s < k.length + pad && Math.abs(t) < k.halfWidth + pad) return true;
+      const deck = k.deck;
+      if (deck && s > -deck.approach - pad && s < k.length + deck.length + pad &&
+          Math.abs(t) < deck.halfWidth + pad) return true;
     }
     return false;
   }
