@@ -77,4 +77,67 @@ await shot('air', { pose: { jumpPressed: true }, holdFor: 0.35, dir: [2.4, 0.9, 
 await shot('grab', { pose: { jumpPressed: true, grabType: 'method' }, holdFor: 0.5, dir: [2.4, 0.7, 1.6] });
 await shot('head', { dir: [1.1, 0.35, 0.5], at: 1.35 });
 
+/**
+ * Mid-grind: rather than hoping the autopilot catches a rail, drop the rider
+ * directly onto one via `_beginGrind` — the same entry point `_tryCatchRail`
+ * calls — then hold a steered balance pose so the lean actually reads.
+ */
+await page.evaluate(() => {
+  const g = window.game;
+  const r = g.rider;
+  const rail = g.course.rails[Math.floor(g.course.rails.length / 2)];
+  const NONE = { steer: 0, tuck: false, brake: false, press: false, jumpPressed: false, grabType: null };
+  const dt = 1 / 120;
+
+  r.reset();
+  r.speed = 9;
+  r._beginGrind(rail, rail.length * 0.35);
+  for (let i = 0; i < 0.4 * 120; i++) r.update(dt, { ...NONE, steer: 0.6 });
+
+  const cam = g.camera;
+  const dir = [2.0, 1.1, 1.6];
+  cam.position.set(r.position.x + dir[0], r.position.y + dir[1], r.position.z + dir[2]);
+  cam.lookAt(r.position.x, r.position.y + 0.8, r.position.z);
+  cam.updateMatrixWorld();
+  g.renderer.render(g.scene, g.camera);
+});
+await page.screenshot({ path: `${OUT}/rider-grind.png` });
+console.log('captured grind');
+
+/**
+ * A collectible burst: park the rider beside an uncollected star and fire the
+ * same pickup path `Game._checkCollectibles` uses, so the vanish-and-sparkle
+ * moment is exactly what a real run would show.
+ */
+await page.evaluate(() => {
+  const g = window.game;
+  const r = g.rider;
+  const star = g.collectibles.stars.find((s) => !s.collected);
+  const NONE = { steer: 0, tuck: false, brake: false, press: false, jumpPressed: false, grabType: null };
+  const dt = 1 / 120;
+
+  r.reset();
+  r.position.set(star.x, star.y, star.z - 2);
+  r.yaw = g.course.trackHeading(star.z);
+  r.speed = 14;
+  r.settle();
+  for (let i = 0; i < 0.4 * 120; i++) r.update(dt, NONE);
+  r.position.set(star.x, star.y, star.z);
+  r.model.root.position.copy(r.position);
+
+  star.collected = true;
+  g.collectibles.collectStar(star.id);
+  g.score.onStar();
+  g.spray.burst(r.position, 10, 2, 0);
+
+  const cam = g.camera;
+  const dir = [1.6, 1.0, 2.2];
+  cam.position.set(r.position.x + dir[0], r.position.y + dir[1], r.position.z + dir[2]);
+  cam.lookAt(r.position.x, r.position.y + 0.9, r.position.z);
+  cam.updateMatrixWorld();
+  g.renderer.render(g.scene, g.camera);
+});
+await page.screenshot({ path: `${OUT}/rider-star.png` });
+console.log('captured star');
+
 await browser.close();
