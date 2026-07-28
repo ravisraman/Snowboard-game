@@ -3,3 +3,8 @@ dist/
 .DS_Store
 *.log
 .vite/
+
+# Local Claude Code state, and the throwaway git worktrees background agents
+# run in. The worktrees carry their own node_modules and are deleted when the
+# agent finishes — nothing in here belongs in the repository.
+.claude/
