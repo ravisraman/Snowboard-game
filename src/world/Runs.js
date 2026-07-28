@@ -131,9 +131,9 @@ export const CLASSIC = {
      * and the margin for a wobble has to be measured in the same units as the
      * speed.
      *
-     * NOTE: `Terrain.js` bakes this into GLSL from the module-level `COURSE`
-     * export rather than from a `Course` instance — see the compatibility note
-     * at the top of `Course.js` before varying it per run.
+     * This is the *base* width. `fork` widens it over its own stretch of the
+     * run, so anything that needs the width at a particular z should ask
+     * `course.trackHalfWidthAt(z)` rather than reading this number.
      */
     halfWidth: 16,
     /** Metres of blend between corduroy and powder. */
@@ -187,6 +187,101 @@ export const CLASSIC = {
       { amp: 12, freq: 0.0028, seed: 31 },
       { amp: 4.5, freq: 0.0065, seed: 57 },
     ],
+  },
+
+  /* --- the fork -------------------------------------------------------- */
+  /**
+   * A fork and rejoin: the piste widens, a rounded ridge rises down the middle
+   * of it, and for a few hundred metres there are two lanes instead of one.
+   *
+   * It is nothing but a shape in the height field. There is no lane parameter,
+   * no committed-lane state on the rider and no second centre line — at every
+   * (x, z) there is still exactly one ground height, so collision, the mesh,
+   * the trees and the tracks ribbon all pick the fork up for free. What makes
+   * it a *choice* rather than a bump is the rider's lateral gravity coupling
+   * (`TUNING.bankDrift` in `Rider.js`): the ridge's flanks tilt across the
+   * board and turn the nose away from the crest, so an approach a metre off
+   * centre is carried into that lane and stays there. Ride the crest dead
+   * straight and you go over it — it costs you height and speed, and that is
+   * the whole penalty. It is never a wall.
+   *
+   * Two derived quantities matter to anyone writing a run:
+   *   - the corduroy widens to `track.halfWidth + widen` while the fork is
+   *     open, so both lanes sit on groomed snow rather than in the powder;
+   *   - the lanes run from `|u| = maxSeparation` out to that widened edge, so
+   *     each is `track.halfWidth + widen - maxSeparation` metres across.
+   *
+   * `Terrain.js` samples the *widest* the corduroy ever gets at its fine 1.5 m
+   * spacing across the whole run, so `widen` costs vertices everywhere. Keep it
+   * to what the lanes actually need.
+   *
+   * Off on Classic. Set `enabled: true` and the rest of these numbers describe
+   * a fork you can ride; they are sized for a 16 m half-width piste.
+   */
+  fork: {
+    enabled: false,
+    /**
+     * The ridge ramps in over `z0`→`z1`, is held at full height `z1`→`z2`, and
+     * eases back out over `z2`→`z3`, each with the same smoothstep the track's
+     * finish taper uses. Give the ramps room: a hundred metres or so, so the
+     * split is visible from far enough back to be decided on.
+     */
+    z0: 1180, z1: 1310, z2: 1700, z3: 1830,
+    /** Height of the crest above the piste it sits on, metres. */
+    maxHeight: 3,
+    /**
+     * Half-width of the ridge, metres — so the two lanes are `2 * maxSeparation`
+     * metres apart at their inner edges. Also sets how steep the flanks are:
+     * the steepest gradient anywhere on the ridge is `maxHeight * PI / (2 *
+     * maxSeparation)`, which at these numbers is about 36 degrees. Push that
+     * much past 40 and it stops being rideable.
+     */
+    maxSeparation: 6.5,
+    /** Extra groomed half-width while the fork is open, so both lanes are corduroy. */
+    widen: 10,
+    /**
+     * Fraction of `maxSeparation` the groomer cannot reach. Inside it the ridge
+     * is untracked snow — powder colour, wind ripples, no corduroy — which is
+     * what makes the split read as a split rather than as a lump in the piste.
+     */
+    groomGap: 0.5,
+  },
+
+  /* --- moguls ----------------------------------------------------------- */
+  /**
+   * A bump field over a stretch of the piste: a cosine lattice across and along
+   * the track, sheared so the rows run diagonally, and multiplied by value
+   * noise so it is rhythmic without being a waffle iron.
+   *
+   * Rideable, not a crash surface. The steepest gradient the field can reach is
+   * `amp * (1 + jitter) * 2*PI / min(spacingU, spacingZ)` — the two axes peak a
+   * quarter-wave apart, so they do not add — which at the numbers below is 0.66.
+   * `check-mechanics.mjs` sweeps the whole field and finds a worst surface
+   * normal of n.y = 0.79, about 38 degrees, which a board carries speed over.
+   *
+   * `Terrain.js` refines its row spacing over the mogul range so the mesh
+   * actually resolves the bumps — otherwise the visuals and the collision, which
+   * is analytic and therefore exact, would quietly disagree by a boot's depth.
+   *
+   * Off on Classic.
+   */
+  moguls: {
+    enabled: false,
+    /** Faded in over `z0`→`z1`, held, faded out over `z2`→`z3`. */
+    z0: 700, z1: 780, z2: 1050, z3: 1130,
+    /** Half the crest-to-trough height, metres. */
+    amp: 0.7,
+    /** Metres between crests across the piste and down it. */
+    spacingU: 9,
+    spacingZ: 12,
+    /** Shear: metres of z the lattice slides per metre across, so rows run diagonally. */
+    skew: 0.45,
+    /** Bumps fade to nothing this far inside the corduroy edge, and 2 m past it. */
+    edgeFade: 3,
+    /** Irregularity. `1 + jitter * 2 * (valueNoise2(...) - 0.5)` scales every bump. */
+    jitter: 0.35,
+    noiseFreq: 0.02,
+    seed: 4471,
   },
 
   /* --- kickers ---------------------------------------------------------- */

@@ -28,10 +28,16 @@ import { CLASSIC } from './Runs.js';
  * Layout of the run most recently constructed, as a plain module-level object.
  *
  * This exists for the modules that were written before runs were a thing and
- * still read the course's extent at module scope: `Terrain.js` (which bakes
- * `trackHalfWidth` and `edgeSoftness` straight into GLSL source), `Resort.js`,
- * `Skiers.js` and `Game.js`. It is a *view*, refreshed by the `Course`
- * constructor — read it, never write it.
+ * still read the course's extent at module scope: `Resort.js` and `Skiers.js`.
+ * It is a *view*, refreshed by the `Course` constructor — read it, never write
+ * it. It is also a liability: it is correct only because exactly one `Course`
+ * is alive at a time, and two would fight over it.
+ *
+ * `Terrain.js` used to be the worst offender — it baked `trackHalfWidth` and
+ * `edgeSoftness` from here straight into GLSL source at module-evaluation time,
+ * which no longer even expresses the truth now that the fork makes the width a
+ * function of z. It takes `course.config` directly and reads nothing from here.
+ * The two remaining readers should follow.
  *
  * Anything with a `Course` instance to hand should prefer `course.config`,
  * which is the real thing and is per-instance.
@@ -180,11 +186,121 @@ export class Course {
     return (x - this.centerX(z)) / Math.hypot(m, 1);
   }
 
+  /* ------------------------------------------------------------------
+   * The fork
+   *
+   * A rounded ridge down the middle of a widened piste, for a few hundred
+   * metres. It is a *shape*, not a structure: at every (x, z) there is still
+   * one ground height, so nothing downstream needs to know it exists. See the
+   * `fork` block in `Runs.js` for what each number does.
+   * ---------------------------------------------------------------- */
+
+  /**
+   * How open the fork is at a given z: 0 before and after, 1 in the middle,
+   * eased in and out with the same smoothstep the track's finish taper uses.
+   */
+  forkAmount(z) {
+    const f = this.config.fork;
+    if (!f || !f.enabled) return 0;
+    return smoothstep(f.z0, f.z1, z) - smoothstep(f.z2, f.z3, z);
+  }
+
+  /**
+   * Groomed half-width at a given z. Constant on a run without a fork; through
+   * one it opens up so both lanes sit on corduroy rather than in the powder.
+   *
+   * Everything that cares where the piste ends should use this rather than
+   * `trackHalfWidth`, which is only ever the base number.
+   */
+  trackHalfWidthAt(z) {
+    const amount = this.forkAmount(z);
+    return amount > 0 ? this.trackHalfWidth + this.config.fork.widen * amount : this.trackHalfWidth;
+  }
+
+  /**
+   * The widest the corduroy ever gets anywhere on the run.
+   *
+   * `Terrain.js` needs this before it starts: its grid has to stay rectangular,
+   * so the fine across-track sampling is laid out once, wide enough for the
+   * fork, and every row uses it.
+   */
+  maxTrackHalfWidth() {
+    const f = this.config.fork;
+    return f && f.enabled ? this.trackHalfWidth + f.widen : this.trackHalfWidth;
+  }
+
+  /**
+   * Height the divider adds at a world position.
+   *
+   * A raised cosine across the ridge: 1 at the crest, 0 at the foot, and — the
+   * part that matters — zero gradient at *both*, so `groundNormal`'s central
+   * differences never find a corner and the crest is a place you can be rather
+   * than a knife edge. The steepest gradient sits halfway down each flank and
+   * is `maxHeight * PI / (2 * maxSeparation)`.
+   */
+  _dividerHeight(x, z) {
+    const amount = this.forkAmount(z);
+    if (amount <= 0) return 0;
+    const f = this.config.fork;
+    const a = Math.abs(this.trackOffset(x, z)) / f.maxSeparation;
+    if (a >= 1) return 0;
+    return f.maxHeight * amount * 0.5 * (1 + Math.cos(Math.PI * a));
+  }
+
+  /**
+   * How much of the divider is under a world position, 0 to 1.
+   *
+   * Used for the two things the height alone cannot say: that the groomer never
+   * reached up there, and — through a vertex attribute — that the mesh should
+   * paint it as untracked snow rather than run corduroy over the top of it.
+   */
+  dividerMask(x, z) {
+    const amount = this.forkAmount(z);
+    if (amount <= 0) return 0;
+    const f = this.config.fork;
+    const au = Math.abs(this.trackOffset(x, z));
+    return amount * (1 - smoothstep(f.maxSeparation * f.groomGap, f.maxSeparation, au));
+  }
+
+  /* ------------------------------------------------------------------
+   * Moguls
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Height a bump field adds at a world position.
+   *
+   * A cosine lattice in track space — across by `spacingU`, along by
+   * `spacingZ`, sheared so the rows run diagonally instead of squaring up with
+   * the piste — scaled by value noise so the rhythm is a rhythm and not a
+   * waffle iron. Faded in and out along z, and faded off at the piste edge so
+   * it hands over to the powder lumps rather than fighting them.
+   */
+  _mogulHeight(x, z) {
+    const m = this.config.moguls;
+    if (!m || !m.enabled) return 0;
+    const along = smoothstep(m.z0, m.z1, z) - smoothstep(m.z2, m.z3, z);
+    if (along <= 0) return 0;
+    const u = this.trackOffset(x, z);
+    const hw = this.trackHalfWidthAt(z);
+    const across = 1 - smoothstep(hw - m.edgeFade, hw + 2, Math.abs(u));
+    if (across <= 0) return 0;
+    const lattice =
+      Math.cos((u * Math.PI * 2) / m.spacingU) *
+      Math.cos(((z + u * m.skew) * Math.PI * 2) / m.spacingZ);
+    const irregular = 1 + m.jitter * 2 * (valueNoise2(x * m.noiseFreq, z * m.noiseFreq, m.seed) - 0.5);
+    return m.amp * along * across * lattice * irregular;
+  }
+
   /** 1 on the corduroy, 0 in deep powder, smoothly blended at the edge. */
   groomAt(x, z) {
     const t = this.config.track;
+    const hw = this.trackHalfWidthAt(z);
     const u = Math.abs(this.trackOffset(x, z));
-    return 1 - smoothstep(t.halfWidth - t.edgeSoftness, t.halfWidth, u);
+    const groomed = 1 - smoothstep(hw - t.edgeSoftness, hw, u);
+    // No groomer climbs its own divider, so the ridge is untracked snow — which
+    // is also what stops the two lanes reading as one very wide piste.
+    const div = this.dividerMask(x, z);
+    return div > 0 ? groomed * (1 - div) : groomed;
   }
 
   /* ------------------------------------------------------------------
@@ -197,7 +313,9 @@ export class Course {
    */
   terrainHeight(x, z) {
     const cfg = this.config;
-    const thw = cfg.track.halfWidth;
+    // The piste opens up through a fork, so the powder blend has to open up
+    // with it — otherwise the lumps would grow straight across the outer lane.
+    const thw = this.trackHalfWidthAt(z);
     const u = this.trackOffset(x, z);
     const au = Math.abs(u);
 
@@ -223,7 +341,12 @@ export class Course {
     const far = smoothstep(ff.from, ff.to, au);
     const farRoll = far * sumNoise(ff.layers, x, z);
 
-    return this.baseHeight(z) + this._undulation(z) + bowl + lumps + camber + farRoll;
+    // Named features, laid on top of the same field. Both return exactly zero
+    // on a run that has not asked for them, so Classic is arithmetically
+    // untouched rather than merely close.
+    const features = this._dividerHeight(x, z) + this._mogulHeight(x, z);
+
+    return this.baseHeight(z) + this._undulation(z) + bowl + lumps + camber + farRoll + features;
   }
 
   /** Terrain plus any kicker ramp — what the board actually rides on. */

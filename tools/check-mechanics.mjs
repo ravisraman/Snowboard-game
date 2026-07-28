@@ -1119,6 +1119,235 @@ const results = await page.evaluate(() => {
     }
   }
 
+  /* ==================================================================
+   * TERRAIN FEATURES — the fork, and mogul fields.
+   *
+   * One contiguous block, matching the checks block at the very end of the
+   * `checks` array. Everything here is the height field in `Course.js`, driven
+   * by the `fork` and `moguls` sections of the run preset.
+   *
+   * Both features ship switched off, because Classic is asserted bit-for-bit
+   * elsewhere and must not move. So the measurements below turn them on by
+   * swapping the *instance's* config — `terrainHeight`, `groomAt` and
+   * `trackHalfWidthAt` all read `this.config` on every call, so the mountain
+   * changes shape under a rider who is otherwise untouched, and the numbers
+   * exercised are exactly the ones `Runs.js` ships as the documented defaults.
+   *
+   * What has to be true:
+   *   - the fork is a *choice*: ride in on one side and you come out on that
+   *     side, through banking alone, with nothing anywhere that knows what a
+   *     lane is. A control run with the fork switched off has to fail the same
+   *     test, or the assertion is measuring the track's own wander;
+   *   - the divider is never a crash surface, from any approach, including
+   *     straight at the crest;
+   *   - both lanes are groomed and the divider is not;
+   *   - the normals stay sane across everything, because every one of the
+   *     rider's forces is a projection of one.
+   * ================================================================ */
+  {
+    const FORK = { ...c.config.fork, enabled: true };
+    const MOGULS = { ...c.config.moguls, enabled: true };
+
+    /** Runs `fn` with the course reshaped, then puts the mountain back. */
+    const withConfig = (patch, fn) => {
+      const base = c.config;
+      c.config = { ...base, ...patch };
+      c.kickerHeight = () => 0;     // a ramp under the fork would decide the test
+      c.railsNear = () => [];
+      try {
+        return fn();
+      } finally {
+        c.config = base;
+        delete c.kickerHeight;
+        delete c.railsNear;
+      }
+    };
+
+    /**
+     * A rider who holds the heading the run is going, and has no opinion
+     * whatsoever about where across the piste to be.
+     *
+     * This is the whole trick of the lane test. A rider given no input at all
+     * would be no good: the centre line wanders thirty metres side to side, so
+     * a straight line leaves the piste on its own and the fork could not be
+     * blamed for it. And a rider steering toward a *lane* would be assuming the
+     * answer. Holding the tangent leaves exactly one thing that can move you
+     * across the run, which is the ground being tilted — so whatever the sign
+     * of the exit offset turns out to be, the divider is what put it there.
+     */
+    const rideHoldingHeading = (startU, speed, z0, zEnd) => {
+      const tan = c.trackTangent(z0);
+      r.reset();
+      r.position.set(c.centerX(z0) + startU * tan.z, 0, z0 - startU * tan.x);
+      r.yaw = c.trackHeading(z0);
+      r.speed = speed;
+      r.settle();
+
+      let crashed = false;
+      let crossed = false;          // ever ended up meaningfully on the far side
+      let exitU = null;             // offset at the end of the fully-open stretch
+      let exitGroom = null;
+      let exitKmh = null;
+      for (let i = 0; i < 120 * 90; i++) {
+        const lookZ = r.position.z + Math.max(14, r.speed * 1.2);
+        let d = c.trackHeading(lookZ) - r.yaw;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        r.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 3)) });
+        if (r.crashed) { crashed = true; break; }
+
+        const u = c.trackOffset(r.position.x, r.position.z);
+        if (startU !== 0 && Math.sign(u) !== Math.sign(startU) && Math.abs(u) > 1) crossed = true;
+        // Sampled at the end of the held stretch, not at the rejoin: by `z3`
+        // the lanes have merged back into one piste and there is no side left
+        // to be on.
+        if (exitU === null && r.position.z >= FORK.z2) {
+          exitU = +u.toFixed(2);
+          exitGroom = +c.groomAt(r.position.x, r.position.z).toFixed(3);
+          exitKmh = +(r.speed * 3.6).toFixed(0);
+        }
+        if (r.position.z >= zEnd) break;
+      }
+      return {
+        startU, crashed, crossed, exitU, exitGroom, exitKmh,
+        endZ: +r.position.z.toFixed(0),
+        endKmh: +(r.speed * 3.6).toFixed(0),
+      };
+    };
+
+    // Dropped in level with the ridge's foot, where it has begun to rise but is
+    // nowhere near full height, so the commitment is the fork's doing and not a
+    // starting position already past the point of no return.
+    const IN_Z = FORK.z0;
+    const IN_U = 4;
+    const SPEED = 26;
+
+    out.fork = {
+      config: FORK,
+      widthAtCrest: withConfig({ fork: FORK }, () => c.trackHalfWidthAt((FORK.z1 + FORK.z2) / 2)),
+      widthBefore: withConfig({ fork: FORK }, () => c.trackHalfWidthAt(FORK.z0 - 200)),
+      left: withConfig({ fork: FORK }, () => rideHoldingHeading(-IN_U, SPEED, IN_Z, FORK.z3)),
+      right: withConfig({ fork: FORK }, () => rideHoldingHeading(IN_U, SPEED, IN_Z, FORK.z3)),
+      // Straight at the crest, which is the one line the ridge does not push
+      // you off. It has to be survivable — the divider is a cost, never a wall.
+      crest: withConfig({ fork: FORK }, () => rideHoldingHeading(0, SPEED, IN_Z, FORK.z3)),
+      // The control, and the reason the test means anything: the identical two
+      // runs on the identical mountain with the ridge taken away.
+      flatLeft: withConfig({}, () => rideHoldingHeading(-IN_U, SPEED, IN_Z, FORK.z3)),
+      flatRight: withConfig({}, () => rideHoldingHeading(IN_U, SPEED, IN_Z, FORK.z3)),
+    };
+
+    // Grooming across the fork, at the widest point. The two lanes are
+    // corduroy; the ridge between them is not, because no groomer climbs it.
+    out.forkGroom = withConfig({ fork: FORK }, () => {
+      const z = (FORK.z1 + FORK.z2) / 2;
+      const tan = c.trackTangent(z);
+      const at = (u) => +c.groomAt(c.centerX(z) + u * tan.z, z - u * tan.x).toFixed(3);
+      const half = c.trackHalfWidthAt(z);
+      return {
+        crest: at(0),
+        innerFlank: at(FORK.maxSeparation * 0.4),
+        laneLeft: at(-(FORK.maxSeparation + half) / 2),
+        laneRight: at((FORK.maxSeparation + half) / 2),
+        laneEdge: at(half - 4),
+        offPiste: at(half + 4),
+        beforeFork: +c.groomAt(c.centerX(FORK.z0 - 200), FORK.z0 - 200).toFixed(3),
+      };
+    });
+
+    /**
+     * The normal field over both features, sampled far more finely than the
+     * 0.6 m the rider's own central differences use.
+     *
+     * `n.y` is the number every force in `Rider.js` is divided by — the lateral
+     * bank and the along-slope acceleration both read `max(n.y, 0.2)` — so a
+     * spike here is not a cosmetic seam, it is a rider fired sideways. The
+     * divider's raised-cosine profile has zero gradient at the crest *and* at
+     * the foot precisely so this stays smooth.
+     */
+    const worstNormal = (zFrom, zTo, uReach) => {
+      const n = { x: 0, y: 1, z: 0 };
+      let worst = 1;
+      let at = null;
+      for (let z = zFrom; z <= zTo; z += 0.75) {
+        const tan = c.trackTangent(z);
+        for (let u = -uReach; u <= uReach; u += 0.4) {
+          const x = c.centerX(z) + u * tan.z;
+          const zz = z - u * tan.x;
+          c.groundNormal(x, zz, n);
+          if (n.y < worst) { worst = n.y; at = [+u.toFixed(1), +z.toFixed(0)]; }
+        }
+      }
+      return { worst: +worst.toFixed(4), at };
+    };
+
+    out.featureNormals = {
+      divider: withConfig({ fork: FORK }, () => worstNormal(FORK.z0 - 20, FORK.z3 + 20, 40)),
+      moguls: withConfig({ moguls: MOGULS }, () => worstNormal(MOGULS.z0 - 20, MOGULS.z3 + 20, 30)),
+      // Same sweep over the same ground with both features off, so the bound
+      // below is known to be about them and not about the mountain underneath.
+      plain: withConfig({}, () => worstNormal(FORK.z0 - 20, FORK.z3 + 20, 40)),
+    };
+
+    // A bump field has to be ridable at speed, not merely present. Driven with
+    // the ordinary follow-the-centre-line autopilot, which makes no allowance
+    // for bumps at all.
+    out.mogulRun = withConfig({ moguls: MOGULS }, () => {
+      const ride = (speed) => {
+        const z0 = MOGULS.z0 - 40;
+        r.reset();
+        r.position.set(c.centerX(z0), 0, z0);
+        r.yaw = c.trackHeading(z0);
+        r.speed = speed;
+        r.settle();
+        let airs = 0;
+        let wasAir = false;
+        for (let i = 0; i < 120 * 90; i++) {
+          const lookZ = r.position.z + Math.max(14, r.speed * 1.7);
+          let d = Math.atan2(c.centerX(lookZ) - r.position.x, lookZ - r.position.z) - r.yaw;
+          while (d > Math.PI) d -= 2 * Math.PI;
+          while (d < -Math.PI) d += 2 * Math.PI;
+          r.update(dt, { ...NONE, steer: Math.max(-1, Math.min(1, d * 2.4)) });
+          if (r.crashed) break;
+          if (!r.grounded && !wasAir) airs++;
+          wasAir = !r.grounded;
+          if (r.position.z >= MOGULS.z3) break;
+        }
+        return {
+          speed, airs, crashed: r.crashed,
+          endZ: +r.position.z.toFixed(0),
+          endKmh: +(r.speed * 3.6).toFixed(0),
+        };
+      };
+      return { config: MOGULS, slow: ride(18), fast: ride(30) };
+    });
+
+    // Crest-to-trough of the bumps, measured rather than asserted from the
+    // config: the same lattice of points sampled with the field on and off, so
+    // what is left is the moguls and nothing of the mountain under them.
+    {
+      const z0 = (MOGULS.z1 + MOGULS.z2) / 2;
+      const pts = [];
+      const tan = c.trackTangent(z0);
+      for (let dz = -14; dz <= 14; dz += 0.5) {
+        for (let u = -8; u <= 8; u += 0.5) {
+          pts.push([c.centerX(z0 + dz) + u * tan.z, z0 + dz - u * tan.x]);
+        }
+      }
+      const sample = (patch) => withConfig(patch, () => pts.map(([x, z]) => c.terrainHeight(x, z)));
+      const on = sample({ moguls: MOGULS });
+      const off = sample({});
+      let hi = -Infinity;
+      let lo = Infinity;
+      for (let i = 0; i < on.length; i++) {
+        const d = on[i] - off[i];
+        hi = Math.max(hi, d);
+        lo = Math.min(lo, d);
+      }
+      out.mogulRun.reliefM = +(hi - lo).toFixed(2);
+    }
+  }
+
   return out;
 });
 
@@ -1876,6 +2105,109 @@ const checks = [
       const worst = Math.max(...now.map((a, i) => Math.abs(a - (was[i] ?? a))));
       return `worst shift ${worst.toFixed(3)}s over ${now.length} kickers`;
     })()],
+
+  /* ==================================================================
+   * TERRAIN FEATURES — the fork, and mogul fields. One contiguous block,
+   * matching the measurement block at the end of the page evaluation.
+   *
+   * A fork is two lanes with a raised divider between them, held open for a
+   * few hundred metres and then rejoined. The whole of it is a shape in the
+   * one analytic height field — no lane parameter, no committed-lane state,
+   * nothing anywhere that knows the word "lane" — so what has to be shown is
+   * that a *shape* is enough to make it a decision.
+   *
+   * Both features are off on Classic, and the three digest checks above are
+   * what says so.
+   * ================================================================ */
+
+  // Both lanes have to sit on groomed snow, so the corduroy opens up over the
+  // fork and closes again after it — which is why `trackHalfWidth` had to stop
+  // being a constant, and why the shader can no longer be told what it is.
+  ['the piste widens through the fork and closes again',
+    results.fork.widthAtCrest === results.fork.widthBefore + results.fork.config.widen &&
+    results.fork.widthAtCrest > results.fork.config.maxSeparation * 2,
+    `${results.fork.widthBefore} m before, ${results.fork.widthAtCrest} m at the widest, ` +
+    `lanes ${(results.fork.widthAtCrest - results.fork.config.maxSeparation).toFixed(1)} m across`],
+
+  // The one that matters. Two identical riders, holding nothing but the
+  // heading the run is going — no steering toward a lane, because there is no
+  // such thing to steer toward — dropped in four metres either side of the
+  // centre line. They come out on the side they went in on, and neither ever
+  // crosses to the other. Nothing in the code arranged that: the ridge's
+  // flanks are tilted, gravity acts across a tilted board, and `bankDrift`
+  // turns it into yaw.
+  ['a rider entering the fork on one side comes out on that side',
+    results.fork.left.exitU < 0 && results.fork.right.exitU > 0 &&
+    !results.fork.left.crossed && !results.fork.right.crossed &&
+    Math.abs(results.fork.left.exitU) > results.fork.config.maxSeparation * 0.8 &&
+    Math.abs(results.fork.right.exitU) > results.fork.config.maxSeparation * 0.8,
+    `in at -4 m, out at ${results.fork.left.exitU} m; in at +4 m, out at ${results.fork.right.exitU} m`],
+
+  // And the control, which is what stops the check above from being a
+  // statement about the track's own wander. Same two runs, same rider, same
+  // hill, ridge removed: both cross the centre line, because a heading held
+  // down a line that bends thirty metres side to side always will.
+  ['and does not, on the same hill with the divider taken away',
+    results.fork.flatLeft.crossed && results.fork.flatRight.crossed,
+    `flat run from -4 m crossed: ${results.fork.flatLeft.crossed}, from +4 m: ${results.fork.flatRight.crossed}`],
+
+  // The divider is a cost, not a wall. Ridden straight at, it is the one line
+  // that does not push you off, and it has to be survivable — you go over,
+  // lose the height and the speed, and carry on.
+  ['riding straight at the crest costs you, and nothing more',
+    !results.fork.crest.crashed && results.fork.crest.endZ >= results.fork.config.z3 - 1,
+    `reached z=${results.fork.crest.endZ} at ${results.fork.crest.endKmh} km/h without crashing`],
+
+  ['no approach to the fork crashes the run',
+    !results.fork.left.crashed && !results.fork.right.crashed && !results.fork.crest.crashed,
+    `through the fork at ${results.fork.left.exitKmh}/${results.fork.right.exitKmh}/` +
+    `${results.fork.crest.exitKmh} km/h, all three reaching the rejoin`],
+
+  // Both lanes are corduroy, or the fork would be a choice between the piste
+  // and the powder rather than between two lines. The ridge between them is
+  // not: no groomer climbs its own divider, and untracked snow down the middle
+  // is most of what makes the split legible from the approach.
+  ['both lanes are groomed and the divider is not',
+    results.forkGroom.laneLeft > 0.98 && results.forkGroom.laneRight > 0.98 &&
+    results.forkGroom.laneEdge > 0.9 && results.forkGroom.crest < 0.01 &&
+    results.forkGroom.innerFlank < 0.2 && results.forkGroom.offPiste < 0.05 &&
+    results.forkGroom.beforeFork === 1,
+    `lanes ${results.forkGroom.laneLeft}/${results.forkGroom.laneRight}, crest ${results.forkGroom.crest}, ` +
+    `off-piste ${results.forkGroom.offPiste}`],
+
+  /* Normals. Every force the rider feels is a projection of this vector, and
+   * two of them divide by its y — so a spike is not a shading seam, it is a
+   * rider thrown sideways by a surface that has a crease in it. Sampled at
+   * 0.4 m across and 0.75 m down, far finer than the 0.6 m the rider's own
+   * central differences use, so a crease narrower than the rider could feel
+   * still fails here.
+   *
+   * The bound is 0.7 — about a 45 degree face. The steepest thing either
+   * feature is *meant* to have is the divider's flank at 36 degrees, and the
+   * plain-mountain control over the same ground is quoted alongside so the
+   * number is known to be about the features rather than about the bowl. */
+  ['the ground stays smooth over the divider',
+    results.featureNormals.divider.worst > 0.7,
+    `worst n.y ${results.featureNormals.divider.worst} at u=${results.featureNormals.divider.at?.[0]} m, ` +
+    `z=${results.featureNormals.divider.at?.[1]} (plain mountain: ${results.featureNormals.plain.worst})`],
+
+  ['the ground stays smooth over a mogul field',
+    results.featureNormals.moguls.worst > 0.7,
+    `worst n.y ${results.featureNormals.moguls.worst} at u=${results.featureNormals.moguls.at?.[0]} m, ` +
+    `z=${results.featureNormals.moguls.at?.[1]}`],
+
+  // Bumps you can carry speed over, at a walk and at a lick. A field that has
+  // to be ridden slowly is a wall in disguise.
+  ['a mogul field is ridable at any speed',
+    !results.mogulRun.slow.crashed && !results.mogulRun.fast.crashed &&
+    results.mogulRun.slow.endZ >= results.mogulRun.config.z3 &&
+    results.mogulRun.fast.endZ >= results.mogulRun.config.z3 && results.mogulRun.fast.endKmh > 40,
+    `18 m/s in -> ${results.mogulRun.slow.endKmh} km/h out, 30 m/s in -> ${results.mogulRun.fast.endKmh} km/h out, ` +
+    `${results.mogulRun.fast.airs} airs`],
+
+  ['and the bumps are actually there',
+    results.mogulRun.reliefM > 0.8 && results.mogulRun.reliefM < 3,
+    `${results.mogulRun.reliefM} m crest to trough`],
 ];
 
 console.log(JSON.stringify(results, null, 2));
