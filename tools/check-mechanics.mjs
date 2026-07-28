@@ -1434,6 +1434,249 @@ ui.rescue = await page.evaluate(() => {
   return { ignoredWhenNotStuck: ignored, actedWhenStuck: g.rider.speed === 10 };
 });
 
+/* ==================================================================
+ * BEGIN tunnels (src/world/Tunnels.js). One contiguous block, matching
+ * the check block at the end of the `checks` array.
+ *
+ * A tunnel is spectacle and must never become a way to crash, so what is
+ * measured here is exactly that: how much room there is between the
+ * ridable ground and the roof, against how high a rider can actually
+ * get inside the bore; whether the light, fog and sound cross a portal
+ * as a blend or as a cut; and whether restarting from inside one leaves
+ * the world dark.
+ *
+ * Classic ships with no tunnels at all — that is what keeps its three
+ * digest checks bit-for-bit — so the bore under test is built here, over
+ * a stretch deliberately chosen to contain a kicker.
+ * ================================================================== */
+
+const TUNNEL_SPAN = { from: 900, to: 1080 };
+
+ui.tunnels = await page.evaluate(async (SPAN) => {
+  const g = window.game;
+  const c = g.course;
+  const r = g.rider;
+  const { buildTunnels } = await import('/src/world/Tunnels.js');
+  const { CLASSIC } = await import('/src/world/Runs.js');
+
+  // Take the frame loop off so nothing runs between the measurements below.
+  g.renderer.setAnimationLoop(null);
+
+  const out = {};
+  out.classicOff = {
+    configEnabled: CLASSIC.tunnels.enabled,
+    configSpans: CLASSIC.tunnels.spans.length,
+    built: g.tunnels.list.length,
+    meshes: g.tunnels.group.children.length,
+    interiorAtStart: g.tunnels.interiorAt(c.centerX(600), 600),
+  };
+
+  const tunnels = buildTunnels(c, { ...CLASSIC.tunnels, enabled: true, spans: [SPAN] });
+  const t = tunnels.list[0];
+  out.bore = {
+    from: t.from, to: t.to,
+    halfWidth: +t.halfWidth.toFixed(2),
+    wallHeight: +t.wallHeight.toFixed(2),
+    crown: +t.crown.toFixed(2),
+    shoulder: t.shoulder,
+    headroom: t.headroom,
+    overJump: t.overJump,
+    // Authored section, before the headroom guarantee grew it.
+    authored: { wallHeight: CLASSIC.tunnels.wallHeight, crown: CLASSIC.tunnels.crown },
+  };
+
+  /* --- 1. Clearance, swept over the whole bore ----------------------
+   * Every metre of the span, every half metre across the ridable band,
+   * both against the bare snow and against the ground the board is
+   * actually on — which inside this span includes a kicker ramp. */
+  {
+    let aboveTerrain = Infinity;
+    let aboveGround = Infinity;
+    let tightest = null;
+    let samples = 0;
+    for (let z = t.from; z <= t.to; z += 1) {
+      for (let x = c.centerX(z) - 40; x <= c.centerX(z) + 40; x += 0.5) {
+        if (Math.abs(c.trackOffset(x, z)) > t.shoulder) continue;
+        const roof = tunnels.roofHeightAt(x, z);
+        if (!Number.isFinite(roof)) { aboveTerrain = -1; continue; }
+        samples++;
+        const overTerrain = roof - c.terrainHeight(x, z);
+        const overGround = roof - c.groundHeight(x, z);
+        if (overGround < aboveGround) {
+          aboveGround = overGround;
+          tightest = { z, u: +c.trackOffset(x, z).toFixed(1) };
+        }
+        aboveTerrain = Math.min(aboveTerrain, overTerrain);
+      }
+    }
+    out.clearance = {
+      samples,
+      aboveTerrain: +aboveTerrain.toFixed(2),
+      aboveGround: +aboveGround.toFixed(2),
+      tightest,
+      // And at the very wall, which is the least room anywhere in the bore.
+      atWall: +tunnels.archHeight(t, t.halfWidth - 0.01).toFixed(2),
+    };
+  }
+
+  /* --- 2. The highest a jump can reach inside this bore --------------
+   * Every kicker that can put a rider into the tunnel, ridden straight
+   * up the middle at the 36 m/s terminal speed of the `original` tuning
+   * with the ollie popped right at the lip. That is the worst case the
+   * physics allows, and it is what the clearance has to beat. */
+  {
+    const was = g.difficultyName;
+    g.setDifficulty('original');
+    const dt = 1 / 120;
+    const NONE = { steer: 0, tuck: true, brake: false, press: false, grabType: null, jumpPressed: false };
+    let apex = 0;
+    let headGap = Infinity;
+    let jumps = 0;
+    const RIDER_TOP = 2;                     // board to the top of the helmet
+    for (const k of c.kickers) {
+      if (!(k.z > t.from - 60 && k.z < t.to)) continue;
+      jumps++;
+      r.reset();
+      r.position.set(k.x - k.dirX * 45, 0, k.z - k.dirZ * 45);
+      r.yaw = Math.atan2(k.dirX, k.dirZ);
+      r.speed = 36;
+      r.settle();
+      for (let i = 0; i < 1200; i++) {
+        const phase = c.kickerPhase(r.position.x, r.position.z);
+        r.update(dt, { ...NONE, jumpPressed: r.grounded && phase > 0.8 });
+        if (r.position.z < t.from || r.position.z > t.to) continue;
+        apex = Math.max(apex, r.position.y - c.terrainHeight(r.position.x, r.position.z));
+        const roof = tunnels.roofHeightAt(r.position.x, r.position.z);
+        if (Number.isFinite(roof)) headGap = Math.min(headGap, roof - (r.position.y + RIDER_TOP));
+      }
+    }
+    g.setDifficulty(was);
+    out.air = {
+      jumps,
+      apexAboveSnow: +apex.toFixed(2),
+      worstHeadGap: Number.isFinite(headGap) ? +headGap.toFixed(2) : null,
+      margin: +(out.clearance.aboveTerrain - apex).toFixed(2),
+    };
+  }
+
+  /* --- 3. The portal blend ------------------------------------------
+   * Sampled a metre at a time straight down the centre line. A hard
+   * switch at a plane would show up here as a single step from 0 to 1;
+   * a blend shows up as a monotone ramp with no step worth seeing. */
+  {
+    const walk = (z0, z1) => {
+      const a = [];
+      for (let z = z0; z <= z1; z += 1) a.push(tunnels.interiorAt(c.centerX(z), z));
+      return a;
+    };
+    const stats = (a, rising) => {
+      let biggest = 0;
+      let monotone = true;
+      for (let i = 1; i < a.length; i++) {
+        const d = a[i] - a[i - 1];
+        biggest = Math.max(biggest, Math.abs(d));
+        if (rising ? d < -1e-9 : d > 1e-9) monotone = false;
+      }
+      return {
+        monotone,
+        biggestStep: +biggest.toFixed(4),
+        first: +a[0].toFixed(4),
+        last: +a[a.length - 1].toFixed(4),
+      };
+    };
+    const half = t.blend * 0.5;
+    out.blend = {
+      metres: t.blend,
+      enter: stats(walk(t.from - half - 2, t.from + half + 2), true),
+      exit: stats(walk(t.to - half - 2, t.to + half + 2), false),
+      // And the same crossing taken at speed: 36 m/s at 120 Hz is 0.3 m a
+      // frame, so the per-frame step is what the eye would actually see.
+      perFrameStep: (() => {
+        let worst = 0;
+        let prev = tunnels.interiorAt(c.centerX(t.from - 40), t.from - 40);
+        for (let z = t.from - 40; z <= t.from + 40; z += 0.3) {
+          const v = tunnels.interiorAt(c.centerX(z), z);
+          worst = Math.max(worst, Math.abs(v - prev));
+          prev = v;
+        }
+        return +worst.toFixed(4);
+      })(),
+    };
+  }
+
+  /* --- 4. Restarting from inside ------------------------------------
+   * The obvious way to leave the whole next run dark and muffled. Driven
+   * with the frame loop off, so what is measured is what `reset()` did
+   * and not what the next frame would have papered over. */
+  {
+    g.scene.remove(g.tunnels.group);
+    g.tunnels = tunnels;
+    g.scene.add(tunnels.group);
+    tunnels.bind({ scene: g.scene, lights: g.lights, audio: g.audio });
+
+    const dress = () => ({
+      interior: +g.tunnels.interior.toFixed(4),
+      fogDensity: +g.scene.fog.density.toFixed(5),
+      fogColor: g.scene.fog.color.getHexString(),
+      sun: +g.lights.sun.intensity.toFixed(3),
+      hemi: +g.lights.hemi.intensity.toFixed(3),
+      fill: +g.lights.fill.intensity.toFixed(3),
+      muffle: +g.audio.muffle.toFixed(4),
+    });
+
+    out.daylight = dress();
+
+    const mid = (t.from + t.to) / 2;
+    g.state = 'riding';
+    r.reset();
+    r.position.set(c.centerX(mid), 0, mid);
+    r.yaw = c.trackHeading(mid);
+    r.speed = 24;
+    r.settle();
+    for (let i = 0; i < 120; i++) tunnels.update(1 / 60, r.position);
+    out.inside = dress();
+    out.insideZ = +r.position.z.toFixed(1);
+
+    // No frame between these two lines — this is `reset()` on its own.
+    g.restart();
+    out.afterRestart = dress();
+    out.afterRestartZ = +r.position.z.toFixed(1);
+    g.renderer.setAnimationLoop(null);
+  }
+
+  out.audioReady = !!g.audio.ready;
+  return out;
+}, TUNNEL_SPAN);
+
+// The filters ramp in wall-clock seconds, so the audio half of the restart has
+// to be read after some of it has passed.
+await page.waitForTimeout(500);
+ui.tunnels.audioAfterRestart = await page.evaluate(() => {
+  const a = window.game.audio;
+  if (!a.ready) return null;
+  return {
+    cutoffHz: Math.round(a.interior.frequency.value),
+    echo: +a.echoSend.gain.value.toFixed(4),
+  };
+});
+
+// And the other end: driven fully inside, the same nodes have to actually move.
+await page.evaluate(() => {
+  const g = window.game;
+  g.audio.setMuffle(1, g.tunnels.config.muffleHz, g.tunnels.config.echo);
+});
+await page.waitForTimeout(500);
+ui.tunnels.audioInside = await page.evaluate(() => {
+  const a = window.game.audio;
+  if (!a.ready) return null;
+  return {
+    cutoffHz: Math.round(a.interior.frequency.value),
+    echo: +a.echoSend.gain.value.toFixed(4),
+  };
+});
+
+/* ===================== END tunnels ================================ */
+
 await browser.close();
 
 /* ---------------------------------------------------------------- */
@@ -1876,6 +2119,118 @@ const checks = [
       const worst = Math.max(...now.map((a, i) => Math.abs(a - (was[i] ?? a))));
       return `worst shift ${worst.toFixed(3)}s over ${now.length} kickers`;
     })()],
+
+  /* ==================================================================
+   * TUNNELS — spectacle, and only spectacle. One contiguous block,
+   * matching the measurement block at the end of the page evaluation.
+   *
+   * The whole design rule for this feature is that it must not become a
+   * new way to end a run: no ceiling collision, nothing in
+   * `_checkHazards` that knows tunnels exist, and a bore cut with more
+   * headroom than the physics can throw a rider into. The first three
+   * checks are that rule, measured rather than asserted in a comment.
+   * ================================================================ */
+
+  // Classic has none. This is the guard on the three digest checks above:
+  // a tunnel is a mesh laid over the terrain, so it could never move the
+  // height field — but a preset that quietly switched itself on would put
+  // trees through `covers()` and change the forest scatter, and that is a
+  // digest. Off in the config, off in the built world.
+  ['classic ships with no tunnels at all',
+    ui.tunnels.classicOff.configEnabled === false &&
+    ui.tunnels.classicOff.configSpans === 0 &&
+    ui.tunnels.classicOff.built === 0 &&
+    ui.tunnels.classicOff.meshes === 0 &&
+    ui.tunnels.classicOff.interiorAtStart === 0,
+    `enabled=${ui.tunnels.classicOff.configEnabled}, ${ui.tunnels.classicOff.built} bores, ` +
+    `${ui.tunnels.classicOff.meshes} meshes`],
+
+  // The bore grows itself to guarantee headroom rather than trusting the
+  // preset author to have thought about it. The test span deliberately has
+  // a kicker in it, so the authored 16 m crown is not what gets built.
+  ['a bore over a jump raises its own roof',
+    ui.tunnels.bore.overJump === true &&
+    ui.tunnels.bore.crown > ui.tunnels.bore.authored.crown &&
+    ui.tunnels.bore.wallHeight > ui.tunnels.bore.authored.wallHeight,
+    `authored ${ui.tunnels.bore.authored.crown} m crown, built ${ui.tunnels.bore.crown} m ` +
+    `(walls ${ui.tunnels.bore.wallHeight} m) to guarantee ${ui.tunnels.bore.headroom} m ` +
+    `at the ${ui.tunnels.bore.shoulder} m shoulder`],
+
+  // Swept: every metre of the bore, every half metre across the corduroy
+  // and its shoulder, measured against the ground the board is actually on
+  // — the kicker ramp inside this span included. Fifteen metres is the
+  // stated margin: it is comfortably above the 15.84 m the next check
+  // measures a rider can reach, and the two together are the real claim.
+  ['the roof never comes near the rider, anywhere along the bore',
+    ui.tunnels.clearance.aboveGround > 15 && ui.tunnels.clearance.aboveTerrain > 15,
+    `worst headroom ${ui.tunnels.clearance.aboveGround} m over the ground ` +
+    `(${ui.tunnels.clearance.aboveTerrain} m over bare snow) at z=${ui.tunnels.clearance.tightest?.z} ` +
+    `u=${ui.tunnels.clearance.tightest?.u} m, over ${ui.tunnels.clearance.samples} samples; ` +
+    `${ui.tunnels.clearance.atWall} m at the wall`],
+
+  // And the number that gives that margin its meaning: every kicker that
+  // can put a rider into this bore, ridden straight up the middle at the
+  // 36 m/s terminal speed of the `original` tuning with the ollie popped
+  // at the lip. Three metres of daylight between the top of the helmet and
+  // the vault at the highest point of the biggest air available.
+  ['a full-speed popped ollie inside a tunnel still clears the vault',
+    ui.tunnels.air.jumps > 0 &&
+    ui.tunnels.air.worstHeadGap > 3 &&
+    ui.tunnels.air.margin > 3,
+    `${ui.tunnels.air.jumps} kicker(s) inside; apex ${ui.tunnels.air.apexAboveSnow} m above the snow, ` +
+    `${ui.tunnels.air.worstHeadGap} m of air left over the helmet, ` +
+    `${ui.tunnels.air.margin} m under the tightest part of the roof`],
+
+  // Portals blend, they do not switch. A plane test would show up here as a
+  // single step of 1.0; over a 30 m blend the steepest a smoothstep can get
+  // is 1.5/30 per metre, so anything under 0.06 is the ramp and nothing else.
+  ['entering and leaving a tunnel is a blend, not a cut',
+    ui.tunnels.blend.enter.monotone && ui.tunnels.blend.exit.monotone &&
+    ui.tunnels.blend.enter.first === 0 && ui.tunnels.blend.enter.last === 1 &&
+    ui.tunnels.blend.exit.first === 1 && ui.tunnels.blend.exit.last === 0 &&
+    ui.tunnels.blend.enter.biggestStep < 0.06 && ui.tunnels.blend.exit.biggestStep < 0.06,
+    `${ui.tunnels.blend.metres} m blend, monotone in and out, biggest step ` +
+    `${ui.tunnels.blend.enter.biggestStep} per metre (${ui.tunnels.blend.perFrameStep} per frame at 36 m/s)`],
+
+  // Restarting from inside a tunnel. Measured with the frame loop stopped,
+  // so this is what `Game.reset()` did on its own rather than what the next
+  // frame would have quietly papered over.
+  ['a tunnel actually takes the light and the sound away',
+    ui.tunnels.inside.interior === 1 &&
+    ui.tunnels.inside.sun < ui.tunnels.daylight.sun * 0.2 &&
+    ui.tunnels.inside.fogDensity > ui.tunnels.daylight.fogDensity * 3 &&
+    ui.tunnels.inside.fogColor !== ui.tunnels.daylight.fogColor &&
+    ui.tunnels.inside.muffle === 1,
+    `at z=${ui.tunnels.insideZ}: sun ${ui.tunnels.daylight.sun}→${ui.tunnels.inside.sun}, ` +
+    `fog ${ui.tunnels.daylight.fogDensity}→${ui.tunnels.inside.fogDensity}, ` +
+    `#${ui.tunnels.daylight.fogColor}→#${ui.tunnels.inside.fogColor}, muffle ${ui.tunnels.inside.muffle}`],
+
+  ['restarting from inside a tunnel gives the daylight straight back',
+    ui.tunnels.afterRestart.interior === 0 &&
+    ui.tunnels.afterRestart.sun === ui.tunnels.daylight.sun &&
+    ui.tunnels.afterRestart.hemi === ui.tunnels.daylight.hemi &&
+    ui.tunnels.afterRestart.fill === ui.tunnels.daylight.fill &&
+    ui.tunnels.afterRestart.fogDensity === ui.tunnels.daylight.fogDensity &&
+    ui.tunnels.afterRestart.fogColor === ui.tunnels.daylight.fogColor &&
+    ui.tunnels.afterRestart.muffle === 0,
+    `back at the gate (z=${ui.tunnels.afterRestartZ}) with sun ${ui.tunnels.afterRestart.sun}, ` +
+    `fog ${ui.tunnels.afterRestart.fogDensity} #${ui.tunnels.afterRestart.fogColor}, ` +
+    `muffle ${ui.tunnels.afterRestart.muffle}`],
+
+  // The audio half of the same thing. The muffle is a low-pass on the two
+  // continuous voices — no new source, nothing sampled — and it rides on
+  // `setTargetAtTime`, so both ends are read after the ramp has had time to
+  // arrive rather than in the tick that set it.
+  ['the interior low-pass closes down over the voices and opens back up',
+    !ui.tunnels.audioReady || (
+      ui.tunnels.audioInside.cutoffHz < 1200 && ui.tunnels.audioInside.echo > 0.1 &&
+      ui.tunnels.audioAfterRestart.cutoffHz > 12000 && ui.tunnels.audioAfterRestart.echo < 0.01
+    ),
+    ui.tunnels.audioReady
+      ? `inside ${ui.tunnels.audioInside.cutoffHz} Hz / echo ${ui.tunnels.audioInside.echo}, ` +
+        `after restart ${ui.tunnels.audioAfterRestart.cutoffHz} Hz / echo ${ui.tunnels.audioAfterRestart.echo}`
+      : 'no audio context in this browser'],
+  /* ======================== END tunnels ============================ */
 ];
 
 console.log(JSON.stringify(results, null, 2));

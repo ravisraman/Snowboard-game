@@ -308,6 +308,122 @@ export const CLASSIC = {
     clearing: { fromZ: 2820, halfWidth: 70, keep: 0.16 },
   },
 
+  /* --- tunnels ---------------------------------------------------------- */
+  /**
+   * Bores the rider shoots through, consumed by `buildTunnels()` in
+   * `Tunnels.js`.
+   *
+   * Spectacle only, and deliberately so. A tunnel is never a hazard: there is
+   * no ceiling collision, nothing in `_checkHazards` consults it, and the arch
+   * is cut with far more headroom than anything on the run can throw you to.
+   * What it changes is the *room* — the light drops, the fog closes in and
+   * darkens, and the two continuous audio voices get a low-pass dragged down
+   * over them, all three blended over `blend` metres so a portal at 36 m/s
+   * reads as a transition rather than a cut.
+   *
+   * Off on Classic, which is why `spans` is empty and `enabled` is false: the
+   * digest checks in `tools/check-mechanics.mjs` assert Classic's height
+   * field, features and forest are bit-for-bit unchanged, and a tunnel adds
+   * nothing to any of them anyway — it is a mesh over the top, not terrain.
+   *
+   * A run that wants tunnels sets `enabled: true` and lists `spans`. Every
+   * section field may be given run-wide here and overridden per span:
+   *
+   *   tunnels: {
+   *     enabled: true,
+   *     crown: 16,
+   *     spans: [
+   *       { from: 820, to: 980 },
+   *       { from: 1740, to: 1830, crown: 12, ribSpacing: 6 },
+   *     ],
+   *   }
+   *
+   * The bore follows the track: its axis is `centerX(z)` and its section is
+   * squared up to `trackTangent(z)`, so it bends with the run rather than
+   * cutting a straight chord across a curve.
+   */
+  tunnels: {
+    /** Master switch. False means `buildTunnels` returns an empty group. */
+    enabled: false,
+    /**
+     * @type {{ from: number, to: number, halfWidth?: number, wallHeight?: number,
+     *          crown?: number, ribSpacing?: number, blend?: number }[]}
+     * Each entry is one bore, `from` and `to` in metres of z. Anything omitted
+     * falls back to the run-wide value below. Spans shorter than about 60 m
+     * are not worth having — the blend eats most of them.
+     */
+    spans: [],
+
+    /* --- section (run-wide defaults, overridable per span) --------------- */
+    /**
+     * Half the bore's width. Must clear `track.halfWidth` by a comfortable
+     * margin: the walls are where the arch meets the ground, and a rider who
+     * drifts off the corduroy inside a tunnel should still be under the roof.
+     */
+    halfWidth: 28,
+    /**
+     * Height of the vertical side walls, up to the springline, and the
+     * headroom on the centre line at the top of the vault.
+     *
+     * Both are a *starting* shape, not a promise — `buildTunnels()` scales
+     * them up if the two headroom numbers below are not met, so the authored
+     * proportions survive while the guarantee holds. Read the built values off
+     * `tunnels.list[i]`, not from here.
+     */
+    wallHeight: 8,
+    crown: 16,
+    /** Metres between the arch ribs. They are what turn a dark tube into speed. */
+    ribSpacing: 9,
+
+    /* --- guaranteed headroom --------------------------------------------- */
+    /**
+     * This is the part that makes a tunnel safe by construction rather than by
+     * good intentions. `buildTunnels()` checks the arch at the *shoulder* —
+     * `track.halfWidth + shoulder` metres off the centre line, the furthest
+     * off the line a rider can plausibly be and still be at speed — and grows
+     * the section until there is at least this much room. The vault only rises
+     * from the shoulder inward, so clearing it clears the whole ridable width.
+     *
+     * `jumpHeadroom` is used when a kicker sits inside the span (or in the
+     * sixty metres before it, which lands you inside all the same);
+     * `headroom` when there is none, where nothing but a flat-ground ollie is
+     * available and a metre would do.
+     *
+     * 19 m, because 15.84 m is the highest a rider can get above the snow
+     * anywhere on Classic — measured, at the 36 m/s terminal speed of the
+     * `original` tuning, off the biggest kicker on the mountain, with the
+     * ollie popped right at the lip. Three metres of margin on top. A run with
+     * bigger kickers than Classic's should raise it; the clearance assertions
+     * in `tools/check-mechanics.mjs` measure the real reach either way.
+     */
+    shoulder: 6,
+    headroom: 6,
+    jumpHeadroom: 19,
+
+    /* --- the transition -------------------------------------------------- */
+    /**
+     * Metres over which light, fog and sound cross-fade at a portal, centred
+     * on the mouth — half outside, half in. 30 m is about 0.8 s at full tuck,
+     * which is long enough not to pop and short enough to still feel like
+     * going *through* something.
+     */
+    blend: 30,
+
+    /* --- what the interior looks and sounds like ------------------------- */
+    /** `FogExp2` density deep inside, against the run's own daylight density. */
+    fogDensity: 0.011,
+    /** Sun intensity inside, as a fraction of daylight. Nearly out — it is behind rock. */
+    sunScale: 0.13,
+    /** Sky fill inside, as a fraction. Halved, not killed, so this reads as shade not night. */
+    hemiScale: 0.42,
+    /** Ambient inside, as a fraction. Above 1 on purpose: it keeps the rider legible. */
+    fillScale: 1.5,
+    /** Where the low-pass over the continuous voices lands when fully inside, in Hz. */
+    muffleHz: 620,
+    /** Wet level of the short feedback delay that stands in for the near walls. */
+    echo: 0.3,
+  },
+
   /* --- collectibles ----------------------------------------------------- */
   /**
    * Stars and slalom gates.

@@ -14,6 +14,9 @@
 
 const NOISE_SECONDS = 3;
 
+/** Where the interior low-pass sits when there is nothing overhead. */
+const OPEN_AIR_HZ = 18000;
+
 export class GameAudio {
   constructor({ enabled = true } = {}) {
     this.supported = enabled && typeof window !== 'undefined' &&
@@ -55,6 +58,8 @@ export class GameAudio {
     this.master.gain.value = this.muted ? 0 : 0.9;
     this.master.connect(ctx.destination);
 
+    this._buildInterior();
+
     // One noise buffer, shared by every voice in the game.
     const frames = Math.floor(ctx.sampleRate * NOISE_SECONDS);
     this.noise = ctx.createBuffer(1, frames, ctx.sampleRate);
@@ -69,7 +74,7 @@ export class GameAudio {
     this.edgeFilter.Q.value = 1.1;
     this.edgeGain = ctx.createGain();
     this.edgeGain.gain.value = 0;
-    this.edge.connect(this.edgeFilter).connect(this.edgeGain).connect(this.master);
+    this.edge.connect(this.edgeFilter).connect(this.edgeGain).connect(this.interior);
     this.edge.start();
 
     // --- Wind: everything above about 40 km/h -------------------------
@@ -79,8 +84,72 @@ export class GameAudio {
     this.windFilter.frequency.value = 500;
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0;
-    this.wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
+    this.wind.connect(this.windFilter).connect(this.windGain).connect(this.interior);
     this.wind.start();
+  }
+
+  /* ------------------------------------------------------------------
+   * Interior colouration — the tunnel bus
+   *
+   * A tunnel does not add a sound; it changes the room the existing ones are
+   * in. So the two continuous voices are routed through one extra stage on
+   * their way to the master, and that stage is transparent — a low-pass parked
+   * at the top of the audible band and a send at zero — until something asks
+   * for it. `setMuffle(0)` restores exactly that, which is what makes
+   * restarting a run from inside a bore safe.
+   *
+   * Two things happen at once, because either alone sounds wrong: the low-pass
+   * sweeps down, which is the rock overhead, and a short feedback delay comes
+   * up, which is the near wall. The delay is fed from the already-filtered
+   * signal so the tail is darker than the source, and it is built from the
+   * same two noise loops as everything else — there is no new source here, and
+   * still no audio file anywhere in the game.
+   * ---------------------------------------------------------------- */
+  _buildInterior() {
+    const ctx = this.ctx;
+
+    this.interior = ctx.createBiquadFilter();
+    this.interior.type = 'lowpass';
+    this.interior.frequency.value = OPEN_AIR_HZ;
+    this.interior.Q.value = 0.6;
+    this.interior.connect(this.master);
+
+    this.echoSend = ctx.createGain();
+    this.echoSend.gain.value = 0;
+    this.interior.connect(this.echoSend);
+
+    const delay = ctx.createDelay(0.5);
+    delay.delayTime.value = 0.115;
+    const feedback = ctx.createGain();
+    feedback.gain.value = 0.34;
+    const damp = ctx.createBiquadFilter();
+    damp.type = 'lowpass';
+    damp.frequency.value = 1100;
+
+    this.echoSend.connect(delay);
+    delay.connect(damp).connect(feedback).connect(delay);
+    delay.connect(this.master);
+
+    this.muffle = 0;
+  }
+
+  /**
+   * How enclosed the rider is: 0 is open mountain, 1 is deep inside a bore.
+   *
+   * Ramped rather than set, so this is safe to call every frame with a value
+   * that is itself already being blended — the two together are what stop a
+   * portal from clicking.
+   */
+  setMuffle(amount, hz = 620, echo = 0.3) {
+    this.muffle = amount;
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const a = Math.max(0, Math.min(1, amount));
+    // Exponential in frequency: an octave is an octave wherever you are.
+    const cut = OPEN_AIR_HZ * Math.pow(hz / OPEN_AIR_HZ, a);
+    this.interior.frequency.setTargetAtTime(cut, t, 0.05);
+    this.interior.Q.setTargetAtTime(0.6 + a * 0.5, t, 0.05);
+    this.echoSend.gain.setTargetAtTime(a * echo, t, 0.08);
   }
 
   _loop() {
