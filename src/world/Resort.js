@@ -104,6 +104,44 @@ function addMarkerPoles(course, bucket, shade) {
 }
 
 /**
+ * A line of poles down the crest of the fork's divider.
+ *
+ * The ridge itself is a fine shape and a hopeless *sign*. Untracked snow on a
+ * groomed piste, viewed from a hundred and fifty metres back at eye level, is
+ * white on white nearly edge-on: photographed from the approach, a three-metre
+ * divider read as a slight swelling in the corduroy and a four-and-a-half-metre
+ * one read as very little more. Height was never going to fix it, because the
+ * problem is contrast rather than size — the same conclusion `addMarkerPoles`
+ * reached about the piste edge, in the comment a few lines above.
+ *
+ * So the divider gets marked the way a real resort marks a piste that splits:
+ * a row of poles straight down the middle of it, which at distance is a dark
+ * dashed line running to a point and is unmistakably a thing to go *around*.
+ * They are placed on the crest, which is also where nobody sensible is riding.
+ *
+ * Poles are furniture, not hazards — `_checkHazards` knows about trees and
+ * skiers and nothing else — so a rider who insists on going over the top hits
+ * nothing, and the penalty stays what it was: the climb, and the powder.
+ */
+function addDividerPoles(course, bucket, shade) {
+  const f = course.config.fork;
+  if (!f || !f.enabled) return;
+
+  for (let z = f.z0; z < f.z3; z += 13) {
+    const amount = course.forkAmount(z);
+    // Nothing to mark where the ridge has not risen; the poles would just be a
+    // line of sticks down the middle of an ordinary piste.
+    if (amount * f.maxHeight < 0.35) continue;
+
+    const x = course.centerX(z);
+    const y = course.terrainHeight(x, z);
+    bucket(z, post(0.075, 1.55, PALETTE.pole, x, y - 0.1, z));
+    bucket(z, post(0.085, 0.55, PALETTE.poleTip, x, y + 1.4, z));
+    shade.push({ x, z, r: 0.16 });
+  }
+}
+
+/**
  * Safety netting, on the outside of the bends only.
  *
  * Netting everywhere would be both wrong and expensive — a real piste only
@@ -321,6 +359,7 @@ export function buildResort(course, quality = {}) {
   };
 
   addMarkerPoles(course, bucket, occluders);
+  addDividerPoles(course, bucket, occluders);
   addNetting(course, bucket);
   if (quality.rocks !== false) addRocks(course, bucket, rng, quality.rockDensity ?? 1, occluders);
 

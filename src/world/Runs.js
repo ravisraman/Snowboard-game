@@ -885,9 +885,22 @@ export const PARK = defineRun({
      * that is still true after any change to the seed or the kicker spacing.
      */
     z0: 1990, z1: 2120, z2: 2340, z3: 2470,
-    maxHeight: 3,
-    maxSeparation: 6.5,
-    widen: 10,
+    /**
+     * Bigger than the documented default of 3 m / 6.5 m, and both together on
+     * purpose: the steepest flank is `maxHeight * PI / (2 * maxSeparation)`, so
+     * scaling the pair keeps the ridge at the same 36 degrees and only changes
+     * how much of it there is.
+     *
+     * The default is a fine *shape* and was almost invisible as a *sign*. From
+     * the corduroy a hundred and fifty metres back — which is where the choice
+     * actually gets made — three metres of white on a twenty-five metre field
+     * of white read as a slight swelling and nothing more. This is sized to be
+     * seen from the approach, which is the only place its being there matters.
+     */
+    maxHeight: 4.5,
+    maxSeparation: 9.5,
+    /** Lanes are `halfWidth + widen - maxSeparation` = 17.5 m across. */
+    widen: 12,
     groomGap: 0.5,
   },
 
