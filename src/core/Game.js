@@ -3,6 +3,7 @@ import { Course } from '../world/Course.js';
 import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
 import { buildRails } from '../world/Rails.js';
+import { buildTunnels } from '../world/Tunnels.js';
 import { buildCollectibles, STAR_PICKUP_RADIUS } from '../world/Collectibles.js';
 import { buildForest, bucketColliders } from '../world/Trees.js';
 import { buildVillage } from '../world/Village.js';
@@ -144,6 +145,17 @@ export class Game {
     this.scene.add(buildKickers(course));
     this.scene.add(buildRails(course));
 
+    // Tunnels. Pure spectacle: nothing in `_checkHazards` ever asks about
+    // them, so a bore can only ever change how the mountain looks and sounds.
+    // Off entirely on runs whose preset does not ask for one, in which case
+    // this is an empty group and an `update()` that returns immediately.
+    this.tunnels = buildTunnels(course, run.tunnels);
+    this.scene.add(this.tunnels.group);
+    // Bound after the lighting rig exists, and it snapshots the run's daylight
+    // values on the way in — so "restore daylight" always means the values
+    // this world was actually built with.
+    this.tunnels.bind({ scene: this.scene, lights: this.lights, audio: this.audio });
+
     this.collectibles = buildCollectibles(course);
     this.scene.add(this.collectibles.group);
 
@@ -155,7 +167,12 @@ export class Game {
 
     // The forest goes up before the slope does, so the slope can bake a ring of
     // contact shade into the snow around every trunk.
-    const keepClear = (x, z) => village.exclude(x, z) || this.resort.exclude(x, z);
+    // A spruce growing through the roof of a tunnel reads as a bug, so the
+    // bore's footprint joins the village and the resort in the scatter's
+    // keep-clear test. On a run with no tunnels `covers()` is a constant
+    // false, which is what leaves Classic's forest digest untouched.
+    const keepClear = (x, z) =>
+      village.exclude(x, z) || this.resort.exclude(x, z) || this.tunnels.covers(x, z);
     const forest = buildForest(course, { exclude: keepClear, quality: this.quality });
     this.scene.add(forest.group);
     this.trees = forest.colliders;
@@ -203,6 +220,11 @@ export class Game {
     this.tracks.reset();
     this.score.reset();
     this.collectibles.resetRun();
+    // Straight back to full daylight and dry audio. Restarting from inside a
+    // bore is the one case the per-frame blend cannot cover on its own — the
+    // rider is at the gate again a frame later, but nothing else would have
+    // been told, and the whole next run would be ridden in the dark.
+    this.tunnels.reset();
     this._grazed = new Set();
     this._bumped = new Set();
     this.chase.reset(this.rider);
@@ -546,6 +568,10 @@ export class Game {
     this.resort.update(sdt);
     this.forest.update(sdt);
     this.collectibles.update(sdt);
+    // Before the audio, so the frame's muffle is the frame's position rather
+    // than the one before it. Real dt, not the slow-motion one: a wipeout in a
+    // tunnel should not also slow the light down.
+    this.tunnels.update(dt, this.rider.position);
     this.audio.update(this.rider, this.state === 'riding');
     this.tracks.update(this.rider);
     this._emitSpray(sdt);
