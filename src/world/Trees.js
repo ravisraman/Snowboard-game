@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { COURSE } from './Course.js';
+import { CLASSIC } from './Runs.js';
 import { clamp, makeRng } from '../core/mathx.js';
 
 /**
@@ -166,8 +166,17 @@ function buildPineGeometry(v) {
 /**
  * Scatters trees over the slope and returns instanced meshes plus a
  * z-bucketed collider list.
+ *
+ * Every placement number comes from the course's run preset (`trees` in
+ * `Runs.js`) — how dense the stand is, how far off the line the bands sit, how
+ * close a trunk may come to the corduroy. Pass `seed` to override the preset's.
  */
-export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}) {
+export function buildForest(course, { exclude, quality = {}, seed } = {}) {
+  const config = course.config ?? CLASSIC;
+  const cfg = config.trees;
+  const trackHalfWidth = config.track.halfWidth;
+  const halfWidth = config.halfWidth;
+  const bands = cfg.bands;
   const densityScale = quality.treeDensity ?? 1;
   const farForest = quality.farForest ?? true;
 
@@ -176,15 +185,15 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
   // mountain — skipped the draws that place the *next* tree, and the whole
   // forest reshuffled. A stand of trees should not move because a chairlift was
   // built four hundred metres away.
-  const rng = makeRng(seed);
+  const rng = makeRng(seed ?? cfg.seed);
   const placements = VARIANTS.map(() => []);
   const colliders = [];
 
-  const zFrom = -60;
-  const zTo = COURSE.length + 380;
+  const zFrom = cfg.zFrom;
+  const zTo = config.length + cfg.zMargin;
 
-  for (let z = zFrom; z < zTo; z += 2.6) {
-    const attempts = 3;
+  for (let z = zFrom; z < zTo; z += cfg.step) {
+    const attempts = cfg.attempts;
     for (let a = 0; a < attempts; a++) {
       const side = rng() < 0.5 ? -1 : 1;
 
@@ -194,51 +203,51 @@ export function buildForest(course, { exclude, quality = {}, seed = 51413 } = {}
       // collider reaching over the groomed line, waiting to end a run that never
       // left the piste.
       const vi = rng.int(0, VARIANTS.length - 1);
-      const scale = 0.62 + rng() * 0.95;
+      const scale = cfg.scale.min + rng() * cfg.scale.range;
       const treeR = VARIANTS[vi].radius * scale * 0.42 + 0.35;
 
       // Most trees live in the forest band; a few crowd the edge of the piste.
       let u;
       const roll = rng();
-      if (roll < 0.02) {
+      if (roll < bands.encroach.upTo) {
         // Encroaching, but with a couple of metres of forgiveness outside the
         // corduroy. Drifting a board's width off the groomed line while you sort
         // out a landing should cost you speed in the powder, not the run.
-        u = side * (COURSE.trackHalfWidth + treeR + 2.6 + rng() * 2.4);
-      } else if (roll < 0.6) {
-        u = side * (COURSE.trackHalfWidth + 4 + rng() * 26);
-      } else if (roll < 0.86) {
-        u = side * (COURSE.trackHalfWidth + 22 + rng() * 150);
+        u = side * (trackHalfWidth + treeR + bands.encroach.gap + rng() * bands.encroach.range);
+      } else if (roll < bands.near.upTo) {
+        u = side * (trackHalfWidth + bands.near.gap + rng() * bands.near.range);
+      } else if (roll < bands.mid.upTo) {
+        u = side * (trackHalfWidth + bands.mid.gap + rng() * bands.mid.range);
       } else {
         if (!farForest) continue;
-        u = side * (200 + rng() * 230);
+        u = side * (bands.far.from + rng() * bands.far.range);
       }
-      if (Math.abs(u) > 440) continue;
+      if (Math.abs(u) > cfg.maxOffset) continue;
 
       // Thin the far field out so the near band stays the visual anchor.
-      const density = 1 - clamp((Math.abs(u) - 30) / 190, 0, 1) * 0.55;
-      if (Math.abs(u) > COURSE.halfWidth - 6 && rng() > 0.8) continue;
-      if (rng() > density * 0.62 * densityScale) continue;
+      const density = 1 - clamp((Math.abs(u) - cfg.thin.from) / cfg.thin.over, 0, 1) * cfg.thin.amount;
+      if (Math.abs(u) > halfWidth - cfg.outerCull.margin && rng() > cfg.outerCull.keep) continue;
+      if (rng() > density * cfg.density * densityScale) continue;
 
-      const zj = z + rng.spread(1.3);
+      const zj = z + rng.spread(cfg.jitter);
       const cx = course.centerX(zj);
       const tan = course.trackTangent(zj);
       const x = cx + u * tan.z;
       const zw = zj - u * tan.x;
 
-      if (course.onKicker(x, zw, 4)) continue;
+      if (course.onKicker(x, zw, cfg.kickerPad)) continue;
       if (exclude && exclude(x, zw)) continue;
 
       // Thin the forest right out around the village so the chalets and the
       // church steeple are actually visible on the run in to the finish.
-      if (zj > 2820 && Math.abs(u) < 70 && rng() > 0.16) continue;
+      if (zj > cfg.clearing.fromZ && Math.abs(u) < cfg.clearing.halfWidth && rng() > cfg.clearing.keep) continue;
 
       const y = course.terrainHeight(x, zw);
 
       placements[vi].push({ x, y, z: zw, scale, yaw: rng() * Math.PI * 2, tint: 0.9 + rng() * 0.18 });
       // The far band is scenery for the mid-ground only — the rider is out of
       // bounds long before reaching it, so it needs no colliders.
-      if (Math.abs(u) < COURSE.halfWidth) colliders.push({ x, z: zw, r: treeR });
+      if (Math.abs(u) < halfWidth) colliders.push({ x, z: zw, r: treeR });
     }
   }
 

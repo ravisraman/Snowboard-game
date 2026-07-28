@@ -1,4 +1,5 @@
 import { makeRng, clamp, smoothstep, valueNoise2 } from '../core/mathx.js';
+import { CLASSIC } from './Runs.js';
 
 /**
  * The Course is the single source of truth for the shape of the mountain.
@@ -12,30 +13,72 @@ import { makeRng, clamp, smoothstep, valueNoise2 } from '../core/mathx.js';
  *   +X  is skier's right
  *   +Y  is up
  * Yaw 0 points down +Z; positive yaw rotates toward +X.
+ *
+ * ---------------------------------------------------------------------------
+ * The shape itself lives in `Runs.js`
+ * ---------------------------------------------------------------------------
+ * This file holds the *structure* — an integrated fall line, a sine-sum centre
+ * line, a bowl, powder lumps, walked kicker and rail placement — and takes
+ * every number in it from a run preset. `new Course(seed)` still builds the
+ * Classic descent, byte for byte; `new Course(seed, PARK)` builds a different
+ * mountain out of the same code.
  */
 
+/**
+ * Layout of the run most recently constructed, as a plain module-level object.
+ *
+ * This exists for the modules that were written before runs were a thing and
+ * still read the course's extent at module scope: `Terrain.js` (which bakes
+ * `trackHalfWidth` and `edgeSoftness` straight into GLSL source), `Resort.js`,
+ * `Skiers.js` and `Game.js`. It is a *view*, refreshed by the `Course`
+ * constructor — read it, never write it.
+ *
+ * Anything with a `Course` instance to hand should prefer `course.config`,
+ * which is the real thing and is per-instance.
+ */
 export const COURSE = {
-  length: 3000,        // metres from the drop-in gate to the finish banner
-  startZ: 24,
-  finishZ: 2870,
-  halfWidth: 190,      // how far the meshed terrain extends either side of the track
+  length: CLASSIC.length,             // metres from the drop-in gate to the finish banner
+  startZ: CLASSIC.startZ,
+  finishZ: CLASSIC.finishZ,
+  halfWidth: CLASSIC.halfWidth,       // how far the meshed terrain extends either side of the track
   // Groomed corduroy half-width. Wider than a real piste of this pitch, and
   // deliberately so: at a hundred and twenty km/h a board covers thirty-odd
   // metres a second, and the margin for a wobble has to be measured in the same
   // units as the speed.
-  trackHalfWidth: 16,
-  edgeSoftness: 3.2,   // metres of blend between corduroy and powder
+  trackHalfWidth: CLASSIC.track.halfWidth,
+  edgeSoftness: CLASSIC.track.edgeSoftness,  // metres of blend between corduroy and powder
 };
 
+/** Refreshes the legacy `COURSE` view from a run config. */
+function publishLayout(config) {
+  COURSE.length = config.length;
+  COURSE.startZ = config.startZ;
+  COURSE.finishZ = config.finishZ;
+  COURSE.halfWidth = config.halfWidth;
+  COURSE.trackHalfWidth = config.track.halfWidth;
+  COURSE.edgeSoftness = config.track.edgeSoftness;
+}
+
 export class Course {
-  constructor(seed = 20240117) {
-    // Kept, because a score is only comparable with another score from the
-    // same mountain — the leaderboard files it with every run.
+  /**
+   * @param {number} [seed] world seed — the leaderboard files it with every run,
+   *   because a score is only comparable with another from the same mountain.
+   * @param {typeof CLASSIC} [config] a run preset from `Runs.js`.
+   */
+  constructor(seed = CLASSIC.seed, config = CLASSIC) {
     this.seed = seed;
+    this.config = config;
     this.rng = makeRng(seed);
-    this.length = COURSE.length;
-    this.finishZ = COURSE.finishZ;
-    this.trackHalfWidth = COURSE.trackHalfWidth;
+    this.length = config.length;
+    this.startZ = config.startZ;
+    this.finishZ = config.finishZ;
+    this.trackHalfWidth = config.track.halfWidth;
+    this.halfWidth = config.halfWidth;
+    this.edgeSoftness = config.track.edgeSoftness;
+
+    // Keep the module-level view in step for the older importers. For Classic
+    // this rewrites the values it already had.
+    publishLayout(config);
 
     this._buildBaseProfile();
     this._buildKickers();
@@ -44,19 +87,25 @@ export class Course {
     this._indexRails();
   }
 
+  /** Human-readable identity of the run, for the HUD and the leaderboard. */
+  get runId() { return this.config.id; }
+  get runName() { return this.config.name; }
+
   /* ------------------------------------------------------------------
    * Fall line
    * ---------------------------------------------------------------- */
 
-  /** Steepness at a given z. Two steeper pitches, then a runout to the village. */
+  /**
+   * Steepness at a given z: a resting grade, plus a Gaussian bump per steeper
+   * pitch, minus the runout that flattens the finish. On Classic that reads as
+   * two steeper pitches and a runout to the village.
+   */
   _gradeAt(z) {
+    const g = this.config.grade;
     const bell = (c, w) => Math.exp(-(((z - c) / w) ** 2));
-    return (
-      0.17 +
-      0.07 * bell(900, 280) +
-      0.06 * bell(1850, 320) -
-      0.135 * smoothstep(2660, 2980, z)
-    );
+    let grade = g.base;
+    for (const b of g.bells) grade += b.amp * bell(b.center, b.width);
+    return grade - g.runout.amount * smoothstep(g.runout.from, g.runout.to, z);
   }
 
   /**
@@ -64,7 +113,7 @@ export class Course {
    * freely while the height stays perfectly continuous.
    */
   _buildBaseProfile() {
-    const n = this.length + 420;
+    const n = this.length + this.config.profileMargin;
     const table = new Float32Array(n + 1);
     let h = 0;
     for (let z = 0; z <= n; z++) {
@@ -86,13 +135,9 @@ export class Course {
 
   /** Rolling undulations along the fall line, faded out over the runout. */
   _undulation(z) {
-    const taper = 1 - 0.85 * smoothstep(2560, 2940, z);
-    return (
-      (4.0 * Math.sin(z * 0.006) +
-        2.4 * Math.sin(z * 0.014 + 1.3) +
-        1.2 * Math.sin(z * 0.028 + 0.4)) *
-      taper
-    );
+    const u = this.config.undulation;
+    const taper = 1 - u.taper.amount * smoothstep(u.taper.from, u.taper.to, z);
+    return sumWaves(u.waves, z) * taper;
   }
 
   /* ------------------------------------------------------------------
@@ -101,13 +146,9 @@ export class Course {
 
   /** X position of the centre of the groomed track at a given z. */
   centerX(z) {
-    const taper = 1 - 0.9 * smoothstep(2680, 2980, z); // straighten out for the finish
-    return (
-      (34 * Math.sin(z * 0.0042) +
-        17 * Math.sin(z * 0.0098 + 2.1) +
-        8.5 * Math.sin(z * 0.019 + 0.7)) *
-      taper
-    );
+    const t = this.config.track;
+    const taper = 1 - t.taper.amount * smoothstep(t.taper.from, t.taper.to, z); // straighten out for the finish
+    return sumWaves(t.waves, z) * taper;
   }
 
   /** dX/dZ of the track centre — the track's tangent slope in plan view. */
@@ -141,8 +182,9 @@ export class Course {
 
   /** 1 on the corduroy, 0 in deep powder, smoothly blended at the edge. */
   groomAt(x, z) {
+    const t = this.config.track;
     const u = Math.abs(this.trackOffset(x, z));
-    return 1 - smoothstep(COURSE.trackHalfWidth - COURSE.edgeSoftness, COURSE.trackHalfWidth, u);
+    return 1 - smoothstep(t.halfWidth - t.edgeSoftness, t.halfWidth, u);
   }
 
   /* ------------------------------------------------------------------
@@ -154,30 +196,32 @@ export class Course {
    * they can be modelled at a much finer resolution than the slope grid.
    */
   terrainHeight(x, z) {
+    const cfg = this.config;
+    const thw = cfg.track.halfWidth;
     const u = this.trackOffset(x, z);
     const au = Math.abs(u);
 
     // A shallow bowl cradles the track so the piste reads as a valley floor.
     // The rise is eased off far out so the valley walls don't become cliffs.
-    const bowl = 0.1 * (Math.hypot(u, 30) - 30) * (1 - 0.45 * smoothstep(90, 320, au));
+    const b = cfg.bowl;
+    const bowl =
+      b.strength *
+      (Math.hypot(u, b.softness) - b.softness) *
+      (1 - b.easeAmount * smoothstep(b.easeFrom, b.easeTo, au));
 
     // Powder is lumpy; the groomed surface is glass. Blend between the two.
-    const powderness = smoothstep(COURSE.trackHalfWidth - 1, COURSE.trackHalfWidth + 9, au);
-    const lumps =
-      powderness *
-      (0.95 * (valueNoise2(x * 0.036, z * 0.036, 71) - 0.5) +
-        0.32 * (valueNoise2(x * 0.085, z * 0.085, 913) - 0.5));
+    const p = cfg.powder;
+    const powderness = smoothstep(thw + p.blendFrom, thw + p.blendTo, au);
+    const lumps = powderness * sumNoise(p.lumps, x, z);
 
     // The groomer leaves a very slight camber on the piste itself.
-    const camber = (1 - powderness) * 0.06 * Math.cos(u * 0.24);
+    const camber = (1 - powderness) * cfg.camber.amp * Math.cos(u * cfg.camber.freq);
 
     // Slow rolling out in the far snowfields. Without it the terrain's outer
     // edge draws a dead-straight line against the peaks on the horizon.
-    const far = smoothstep(200, 420, au);
-    const farRoll =
-      far *
-      (12 * (valueNoise2(x * 0.0028, z * 0.0028, 31) - 0.5) +
-        4.5 * (valueNoise2(x * 0.0065, z * 0.0065, 57) - 0.5));
+    const ff = cfg.farField;
+    const far = smoothstep(ff.from, ff.to, au);
+    const farRoll = far * sumNoise(ff.layers, x, z);
 
     return this.baseHeight(z) + this._undulation(z) + bowl + lumps + camber + farRoll;
   }
@@ -207,15 +251,16 @@ export class Course {
 
   _buildKickers() {
     const rng = this.rng;
+    const cfg = this.config.kickers;
     this.kickers = [];
-    let z = 300;
-    while (z < COURSE.finishZ - 220) {
+    let z = cfg.firstZ;
+    while (z < this.finishZ - cfg.endMargin) {
       const size = rng();
-      const height = 1.5 + size * 1.9;          // 1.5 – 3.4 m lip
-      const len = 6.5 + size * 5.0;             // short and steep; ~25° at the lip
-      const width = 7.5 + rng() * 5.5;
+      const height = cfg.height.min + size * cfg.height.range;   // 1.5 – 3.4 m lip on Classic
+      const len = cfg.length.min + size * cfg.length.range;      // short and steep; ~25° at the lip
+      const width = cfg.width.min + rng() * cfg.width.range;
       // Sit the kicker somewhere across the piste so lines have to be chosen.
-      const offset = rng.spread(COURSE.trackHalfWidth - width * 0.5 - 1.5);
+      const offset = rng.spread(this.trackHalfWidth - width * 0.5 - cfg.offsetMargin);
       const cx = this.centerX(z) + offset * Math.cos(Math.atan(this.centerSlope(z)));
       const tan = this.trackTangent(z);
       this.kickers.push({
@@ -227,7 +272,7 @@ export class Course {
         halfWidth: width * 0.5,
         height,
       });
-      z += 150 + rng() * 135;
+      z += cfg.spacing.min + rng() * cfg.spacing.range;
     }
 
     // One signature jump: a spine down the middle, wide enough that the
@@ -235,16 +280,16 @@ export class Course {
     // of the mountain rather than placed separately — it reuses the same
     // record and the same `kickerProfile()` the ordinary kickers use, just
     // with a wider table and the `hip` flag set.
-    if (this.kickers.length) {
-      const mid = COURSE.finishZ * 0.5;
+    if (cfg.hip.enabled && this.kickers.length) {
+      const mid = this.finishZ * cfg.hip.atFraction;
       let spine = this.kickers[0];
       for (const k of this.kickers) {
         if (Math.abs(k.z - mid) < Math.abs(spine.z - mid)) spine = k;
       }
       spine.hip = true;
-      spine.hipAngle = 0.36;                 // ~20 degrees of split either side
-      spine.halfWidth = Math.max(spine.halfWidth, 6.5);
-      spine.length = Math.max(spine.length, 10);
+      spine.hipAngle = cfg.hip.angle;        // ~20 degrees of split either side on Classic
+      spine.halfWidth = Math.max(spine.halfWidth, cfg.hip.minHalfWidth);
+      spine.length = Math.max(spine.length, cfg.hip.minLength);
     }
   }
 
@@ -299,10 +344,11 @@ export class Course {
     const at = Math.abs(t);
     if (at > k.halfWidth) return 0;
 
+    const cfg = this.config.kickers;
     const p = s / k.length;
     // Steepest right at the lip: that is what converts speed into loft.
-    const rise = Math.pow(p, 1.7);
-    const across = 1 - smoothstep(k.halfWidth - 2.6, k.halfWidth, at);
+    const rise = Math.pow(p, cfg.rampExponent);
+    const across = 1 - smoothstep(k.halfWidth - cfg.edgeBlend, k.halfWidth, at);
     return k.height * rise * across;
   }
 
@@ -361,14 +407,15 @@ export class Course {
 
   _buildRails() {
     const rng = this.rng;
+    const cfg = this.config.rails;
     this.rails = [];
-    let z = 260;
-    while (z < COURSE.finishZ - 200) {
-      if (rng() < 0.5 && !this.onKicker(this.centerX(z), z, 10)) {
-        const curved = rng() < 0.35;
-        const len = 9 + rng() * 7;
-        const height = 0.55 + rng() * 0.35;
-        const offset = rng.spread(this.trackHalfWidth - 6);
+    let z = cfg.firstZ;
+    while (z < this.finishZ - cfg.endMargin) {
+      if (rng() < cfg.chance && !this.onKicker(this.centerX(z), z, cfg.kickerClearance)) {
+        const curved = rng() < cfg.curveChance;
+        const len = cfg.length.min + rng() * cfg.length.range;
+        const height = cfg.height.min + rng() * cfg.height.range;
+        const offset = rng.spread(this.trackHalfWidth - cfg.offsetMargin);
         const cx = this.centerX(z) + offset * Math.cos(Math.atan(this.centerSlope(z)));
         const tan = this.trackTangent(z);
         this.rails.push({
@@ -378,11 +425,13 @@ export class Course {
           dirZ: tan.z,
           length: len,
           height,
-          halfWidth: 0.16,      // visual width — the catch margin is separate and wider
-          curveRadius: curved ? (rng() < 0.5 ? 1 : -1) * (35 + rng() * 25) : 0,
+          halfWidth: cfg.halfWidth,   // visual width — the catch margin is separate and wider
+          curveRadius: curved
+            ? (rng() < 0.5 ? 1 : -1) * (cfg.curveRadius.min + rng() * cfg.curveRadius.range)
+            : 0,
         });
       }
-      z += 130 + rng() * 140;
+      z += cfg.spacing.min + rng() * cfg.spacing.range;
     }
   }
 
@@ -429,3 +478,30 @@ export class Course {
 }
 
 const EMPTY = [];
+
+/**
+ * Sum of `amp * sin(z * freq + phase)` over a list of waves.
+ *
+ * The fall line's swells and the track's wander are both built from one of
+ * these. Keeping it a list rather than three named terms is what lets a run
+ * preset change the *character* of the line — a single long traverse, or a
+ * dozen tight switchbacks — instead of only its size.
+ */
+function sumWaves(waves, z) {
+  let sum = 0;
+  for (let i = 0; i < waves.length; i++) {
+    const w = waves[i];
+    sum += w.amp * Math.sin(z * w.freq + w.phase);
+  }
+  return sum;
+}
+
+/** Sum of `amp * (valueNoise2(x * freq, z * freq, seed) - 0.5)` over a list of octaves. */
+function sumNoise(layers, x, z) {
+  let sum = 0;
+  for (let i = 0; i < layers.length; i++) {
+    const n = layers[i];
+    sum += n.amp * (valueNoise2(x * n.freq, z * n.freq, n.seed) - 0.5);
+  }
+  return sum;
+}

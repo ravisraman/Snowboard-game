@@ -1382,6 +1382,146 @@ const checks = [
     results.curvedRail.found
       ? `worst drift ${results.curvedRail.worstDrift} m over ${results.curvedRail.frames} frames`
       : 'no curved rail generated on this seed'],
+
+  /* ==================================================================
+   * BEGIN per-run course configuration (src/world/Runs.js)
+   *
+   * The course used to hold its shape as literals inside `Course.js`.
+   * It now reads every number from a run preset, so a second run is a
+   * new object in `Runs.js` rather than a branch in the generator.
+   *
+   * That refactor is only safe if Classic came through it unchanged,
+   * and it only stays safe if nothing quietly re-hardcodes a constant
+   * on the way past. The two halves below assert exactly that:
+   *
+   *   1. Classic is byte-identical — fixed sample points and whole
+   *      digests of the height field, the kicker and rail records and
+   *      the forest scatter, against numbers captured before the
+   *      refactor. These are not tolerances on a vibe; they are the
+   *      same doubles or they are a regression.
+   *   2. The seam is live — feeding a deliberately different preset
+   *      through the same code has to produce a different mountain.
+   *      Without this, a constant could drift back into `Course.js`
+   *      and half of (1) would still pass.
+   *
+   * Runs in Node against the modules directly, after the browser has
+   * closed: the course is pure maths and needs no page.
+   * ================================================================== */
+  ...(await (async () => {
+    const { Course, COURSE } = await import('../src/world/Course.js');
+    const { CLASSIC, defineRun, RUNS, runById } = await import('../src/world/Runs.js');
+    const { buildForest } = await import('../src/world/Trees.js');
+
+    /** Weighted sum over a fixed lattice — sensitive to a change anywhere in the field. */
+    const shapeDigest = (c) => {
+      let a = 0;
+      for (let z = 0; z <= 2900; z += 7) {
+        a += c.baseHeight(z) * 1.7 + c.centerX(z) * 3.1 + c.centerSlope(z) * 101 + c.trackHeading(z) * 13;
+        for (let x = -400; x <= 400; x += 37) {
+          a += c.terrainHeight(x, z) * 1.3 + c.groundHeight(x, z) * 0.7 +
+               c.groomAt(x, z) * 11 + c.trackOffset(x, z) * 0.3;
+        }
+      }
+      return a;
+    };
+    const featureDigest = (c) => {
+      let a = c.kickers.length * 1e6 + c.rails.length * 1e4;
+      for (const k of c.kickers) {
+        a += k.x + k.z * 3 + k.length * 7 + k.halfWidth * 11 + k.height * 13 + (k.hip ? k.hipAngle * 17 : 0);
+      }
+      for (const r of c.rails) {
+        a += r.x * 1.1 + r.z * 3 + r.length * 7 + r.height * 11 + r.curveRadius * 13 + r.halfWidth * 19;
+      }
+      return a;
+    };
+    const forestDigest = (list) => {
+      let a = list.length * 1e6;
+      for (const p of list) a += p.x * 1.1 + p.z * 3 + p.r * 17;
+      return a;
+    };
+
+    const classic = new Course();
+    const forest = buildForest(classic, {});
+
+    // Captured from the pre-refactor course. Never "fix" one of these by
+    // pasting in a new number: if it moved, the mountain moved.
+    const REFERENCE = { shape: -5165795.767075, feature: 11121806.063125, forest: 1655268397.467164 };
+    const shape = shapeDigest(classic);
+    const feature = featureDigest(classic);
+    const trees = forestDigest(forest.list);
+
+    // A handful of named points, so a failure says *where* as well as *that*.
+    const SPOTS = [
+      [0, 0, 3.423586], [0, 500, -80.262732], [12, 900, -167.192577],
+      [-40, 1200, -234.034416], [0, 1850, -364.666611], [80, 2000, -402.851305],
+      [-150, 2400, -463.736282], [0, 2870, -549.670390], [300, 1500, -277.261833],
+      [-420, 700, -110.559628],
+    ];
+    const spotErrors = SPOTS
+      .map(([x, z, h]) => [x, z, Math.abs(classic.terrainHeight(x, z) - h)])
+      .filter(([, , e]) => e > 5e-6);
+
+    // A preset that differs in every axis a future run is expected to vary.
+    const VARIED = defineRun({
+      id: 'harness-varied',
+      name: 'Harness Varied',
+      grade: { base: 0.26, bells: [{ amp: 0.1, center: 600, width: 200 }] },
+      track: { halfWidth: 26, waves: [{ amp: 70, freq: 0.003, phase: 0.2 }] },
+      kickers: { spacing: { min: 60, range: 40 }, hip: { enabled: false } },
+      rails: { chance: 0 },
+      trees: { density: 0.2 },
+    });
+    const varied = new Course(20240117, VARIED);
+    const variedForest = buildForest(varied, {});
+    // Rebuild Classic afterwards: `COURSE` is a view of the last course made.
+    const classicAgain = new Course();
+
+    const seam = {
+      grade: Math.abs(varied.baseHeight(1500) - classic.baseHeight(1500)) > 10,
+      center: Math.abs(varied.centerX(700) - classic.centerX(700)) > 5,
+      width: varied.trackHalfWidth === 26 && varied.groomAt(varied.centerX(900) + 20, 900) > 0.5,
+      kickers: varied.kickers.length > classic.kickers.length * 2,
+      noHip: !varied.kickers.some((k) => k.hip) && classic.kickers.some((k) => k.hip),
+      noRails: varied.rails.length === 0 && classic.rails.length > 0,
+      trees: variedForest.list.length < forest.list.length * 0.7,
+      terrain: Math.abs(varied.terrainHeight(0, 1500) - classic.terrainHeight(0, 1500)) > 1,
+    };
+    const seamDead = Object.entries(seam).filter(([, ok]) => !ok).map(([k]) => k);
+
+    return [
+      ['the classic height field is bit-for-bit what it was',
+        Math.abs(shape - REFERENCE.shape) < 1e-6 && spotErrors.length === 0,
+        spotErrors.length
+          ? `${spotErrors.length} spot samples moved, worst at ${spotErrors[0][0]},${spotErrors[0][1]}`
+          : `digest ${shape.toFixed(6)}, ${SPOTS.length} spot samples exact`],
+      ['the classic kickers and rails are bit-for-bit what they were',
+        Math.abs(feature - REFERENCE.feature) < 1e-6,
+        `${classic.kickers.length} kickers, ${classic.rails.length} rails, digest ${feature.toFixed(6)}`],
+      ['the classic forest scatter is bit-for-bit what it was',
+        Math.abs(trees - REFERENCE.forest) < 1e-6,
+        `${forest.list.length} colliders, digest ${trees.toFixed(6)}`],
+      ['the course reports which run it is',
+        classic.runId === 'classic' && classic.runName === CLASSIC.name && classic.config === CLASSIC &&
+        runById('classic') === CLASSIC && runById('nonsense') === CLASSIC && RUNS.includes(CLASSIC),
+        `${classic.runId} / ${classic.runName}, ${RUNS.length} run(s) offered`],
+      ['the legacy COURSE export still describes the run in play',
+        COURSE.length === CLASSIC.length && COURSE.startZ === CLASSIC.startZ &&
+        COURSE.finishZ === CLASSIC.finishZ && COURSE.halfWidth === CLASSIC.halfWidth &&
+        COURSE.trackHalfWidth === CLASSIC.track.halfWidth &&
+        COURSE.edgeSoftness === CLASSIC.track.edgeSoftness &&
+        classicAgain.trackHalfWidth === CLASSIC.track.halfWidth,
+        `${COURSE.length} m, half-width ${COURSE.trackHalfWidth} m`],
+      ['a different preset actually builds a different mountain',
+        seamDead.length === 0,
+        seamDead.length ? `ignored by the generator: ${seamDead.join(', ')}` : 'every varied field took effect'],
+      ['overriding a preset never edits the one it came from',
+        CLASSIC.track.halfWidth === 16 && CLASSIC.track.waves.length === 3 &&
+        CLASSIC.rails.chance === 0.5 && CLASSIC.kickers.hip.enabled === true &&
+        VARIED.track.waves.length === 1 && VARIED.track.edgeSoftness === CLASSIC.track.edgeSoftness,
+        'CLASSIC intact, arrays replaced rather than spliced'],
+    ];
+  })()),
+  /* ================= END per-run course configuration ================ */
 ];
 
 console.log(JSON.stringify(results, null, 2));
