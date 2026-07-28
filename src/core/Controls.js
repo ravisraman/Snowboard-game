@@ -56,6 +56,9 @@ export const TRICK_GUIDE = [
   { name: 'Close one', detail: 'Threading a tree at speed' },
   { name: 'Clipping a skier', detail: 'Costs you the speed and the multiplier — but not the run. Only trees end it' },
   { name: 'Powder turn', detail: 'A committed carve off the groomer' },
+  { name: 'Grind', detail: 'Ride onto a rail or box and hold your line — steer to balance, pop off the end' },
+  { name: 'Star', detail: 'Ride through one — no trick needed, and it never costs you anything to miss' },
+  { name: 'Gate', detail: 'Thread the poles — a streak of hits pays more each time, a miss just resets it' },
 ];
 
 export const SCORING_NOTE =

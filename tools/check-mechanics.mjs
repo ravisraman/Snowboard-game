@@ -151,6 +151,46 @@ const results = await page.evaluate(() => {
     out.kickers = { count: airs.length, minAir: Math.min(...airs), maxAir: Math.max(...airs) };
   }
 
+  /**
+   * The spine kicker's two lobes are mirror images of each other, so a
+   * symmetric straight-line approach into either one is, correctly, a
+   * symmetric result — the split reads as a visual and geometric choice of
+   * line, not as a lateral force this physics model has no channel for. What
+   * has to hold regardless of which lobe you take is the ordinary contract
+   * every kicker keeps: ride up either half and it sends you.
+   */
+  {
+    const hip = c.kickers.find((k) => k.hip);
+    if (!hip) {
+      out.hipKicker = { found: false };
+    } else {
+      const ride = (lateral) => {
+        r.reset();
+        const z0 = hip.z - 20;
+        const tan = c.trackTangent(z0);
+        r.position.set(hip.x + lateral * tan.z, 0, hip.z - hip.dirZ * 20 - lateral * tan.x);
+        r.yaw = Math.atan2(hip.dirX, hip.dirZ);
+        r.speed = 22;
+        r.settle();
+        let air = 0, sawAir = false;
+        for (let i = 0; i < 500; i++) {
+          r.update(dt, NONE);
+          if (!r.grounded) { sawAir = true; air = Math.max(air, r.airTime); }
+          if (sawAir && r.grounded && air > 0.05) break;
+        }
+        return air;
+      };
+      const left = ride(-hip.halfWidth * 0.45);
+      const right = ride(hip.halfWidth * 0.45);
+      out.hipKicker = {
+        found: true,
+        leftAir: +left.toFixed(2),
+        rightAir: +right.toFixed(2),
+        bothLaunch: left > 0.15 && right > 0.15,
+      };
+    }
+  }
+
   /* Spinning must rotate the board without bending the flight path. */
   {
     const k = c.kickers[0];
@@ -542,6 +582,14 @@ const results = await page.evaluate(() => {
       endedAt: lastTop,
     };
 
+    // A rider who simply follows the centre line the whole way down should
+    // still pick up a good number of stars — most of them sit close to it.
+    out.collectibles = {
+      starsPlaced: g.collectibles.stars.length,
+      gatesPlaced: g.collectibles.gates.length,
+      starsCollected: g.score.starsCollected,
+    };
+
     // A crash keeps the points already banked but takes the streak.
     g.score.combo = 5;
     const bankedBeforeCrash = g.score.total;
@@ -706,6 +754,129 @@ const results = await page.evaluate(() => {
     g.score.reset();
   }
 
+  /**
+   * Collectible scoring: stars pay flat and unmultiplied, gates escalate on a
+   * streak and simply reset — never punish — on a miss.
+   */
+  {
+    const s = new g.score.constructor();
+    s.combo = 5; // the trick multiplier must not touch a star's payout
+    const before = s.total;
+    s.onStar();
+    const starGain = s.total - before;
+
+    s.reset();
+    s.onGate(true);
+    s.onGate(true);
+    const streakBefore = s.gateStreak;
+    const totalBeforeMiss = s.total;
+    s.onGate(false);
+    out.collectibleScoring = {
+      starGain,
+      streakBeforeMiss: streakBefore,
+      streakAfterMiss: s.gateStreak,
+      scoreKeptOnMiss: s.total === totalBeforeMiss,
+    };
+  }
+
+  /**
+   * Grinds: the catch has to be generous but bounded, a blown balance has to
+   * cost the run nothing worse than a stumble, and riding one out has to pay.
+   */
+  {
+    const rail = c.rails[0];
+    if (!rail) {
+      out.rails = { count: 0 };
+    } else {
+      const catchAt = (lateral, angleDeg, heightOffset) => {
+        r.reset();
+        const s = rail.length * 0.4;
+        const p = c.railPointAt(rail, s);
+        const tan = c.railTangentAt(rail, s);
+        const px = tan.z, pz = -tan.x;
+        r.position.set(p.x + px * lateral, c.railHeightAt(rail, s) + heightOffset, p.z + pz * lateral);
+        const railYaw = Math.atan2(tan.x, tan.z);
+        r.yaw = railYaw + (angleDeg * Math.PI) / 180;
+        r.boardYaw = r.yaw;
+        r.speed = 15;
+        r.grounded = false;
+        r._tryCatchRail();
+        return r.grinding;
+      };
+
+      const beginGrind = (railToUse, s0 = 0) => {
+        r.reset();
+        r.grinding = true;
+        r.grindRail = railToUse;
+        r.grindS = s0;
+        r.grindTime = 0;
+        r.grindBalance = 0;
+        r.grindBalanceVel = 0;
+        r.speed = 15;
+        r.grounded = false;
+      };
+
+      out.railCatch = {
+        withinMargin: catchAt(0.4, 10, 0.1),
+        outsideLateral: catchAt(2.5, 10, 0.1),
+        outsideAngle: catchAt(0.4, 80, 0.1),
+        outsideHeight: catchAt(0.4, 10, 3.5),
+      };
+
+      // Speed bleeds off steadily while grinding.
+      beginGrind(rail);
+      const speedBefore = r.speed;
+      for (let i = 0; i < 30 && r.grinding; i++) r.update(dt, NONE);
+      out.railFriction = { before: +speedBefore.toFixed(2), after: +r.speed.toFixed(2) };
+
+      // Holding hard over blows the balance meter and stumbles, not crashes.
+      // Slowed down and started from the foot, so the rail lasts long enough
+      // for the balance spring's overshoot to actually cross the fail
+      // threshold before the rider reaches the end of it.
+      beginGrind(rail, 0);
+      r.speed = 6;
+      let fellOff = false;
+      let poppedInstead = false;
+      for (let i = 0; i < 240 && r.grinding; i++) {
+        r.update(dt, { ...NONE, steer: 1 });
+        if (!r.grinding) { fellOff = true; poppedInstead = !!r.grindPopped; }
+      }
+      out.railFail = { fellOff, poppedInstead, crashed: r.crashed, stumbled: r.stumbleTime > 0 };
+
+      // Riding one all the way out pops you airborne and pays.
+      beginGrind(rail);
+      let popped = null;
+      for (let i = 0; i < 900 && r.grinding; i++) {
+        r.update(dt, NONE);
+        if (r.grindPopped) popped = r.grindPopped;
+      }
+      const award = popped ? g.score.onGrindPopped(popped.seconds) : null;
+      out.railPop = { popped: !!popped, seconds: +(popped?.seconds ?? 0).toFixed(2), points: award?.points ?? 0 };
+
+      // A curved rail's parametrisation has to stay self-consistent — the
+      // rider is clamped exactly onto it, so this is really a check on
+      // `railPointAt`/`_updateGrind` agreeing with each other over the whole
+      // length rather than on the rider drifting off an arc it cannot leave.
+      const curved = c.rails.find((rr) => rr.curveRadius !== 0);
+      if (curved) {
+        beginGrind(curved);
+        let worstDrift = 0;
+        let frames = 0;
+        while (r.grinding && frames < 600) {
+          r.update(dt, NONE);
+          if (r.grinding) {
+            const p = c.railPointAt(curved, Math.min(r.grindS, curved.length));
+            worstDrift = Math.max(worstDrift, Math.hypot(r.position.x - p.x, r.position.z - p.z));
+          }
+          frames++;
+        }
+        out.curvedRail = { found: true, worstDrift: +worstDrift.toFixed(4), frames };
+      } else {
+        out.curvedRail = { found: false, worstDrift: 0, frames: 0 };
+      }
+    }
+  }
+
   return out;
 });
 
@@ -751,7 +922,7 @@ audio.carving = await page.evaluate(() => ({
 audio.oneShots = await page.evaluate(() => {
   const a = window.game.audio;
   try {
-    a.ollie(); a.land(12, 0.2); a.powderPuff(); a.skate(); a.trick(4); a.fail(); a.crash();
+    a.ollie(); a.land(12, 0.2); a.powderPuff(); a.skate(); a.trick(4); a.fail(); a.crash(); a.cheer();
     return 'ok';
   } catch (e) {
     return `threw: ${e.message}`;
@@ -1080,6 +1251,11 @@ const checks = [
     results.combo.afterCrash === 1 && results.combo.keptPoints,
     `combo -> ${results.combo.afterCrash}`],
   ['every kicker launches', results.kickers.minAir > 0.4, `min air ${results.kickers.minAir}s over ${results.kickers.count} kickers`],
+  ['the spine kicker launches off both lobes',
+    results.hipKicker.found && results.hipKicker.bothLaunch,
+    results.hipKicker.found
+      ? `left ${results.hipKicker.leftAir}s vs right ${results.hipKicker.rightAir}s`
+      : 'no hip kicker generated on this seed'],
   ['cruise gets down the mountain too', results.cruiseRun.finished,
     results.cruiseRun.finished
       ? `reached the village in ${results.cruiseRun.seconds} s`
@@ -1178,6 +1354,34 @@ const checks = [
   ['the ribbon holds no NaN vertices', results.tracks.nanVertices === 0, `${results.tracks.nanVertices} bad vertices`],
   ['every visible ribbon vertex sits on the snow', results.tracks.worstHeightError < 0.001,
     `worst error ${results.tracks.worstHeightError} m`],
+
+  ['a centre-line descent still picks up stars',
+    results.collectibles.starsCollected > 5,
+    `${results.collectibles.starsCollected} of ${results.collectibles.starsPlaced} stars, ${results.collectibles.gatesPlaced} gates on the course`],
+  ['a star pays flat, unmultiplied by the trick combo',
+    results.collectibleScoring.starGain === 15, `${results.collectibleScoring.starGain} pts at combo 5`],
+  ['a gate streak resets on a miss without losing banked points',
+    results.collectibleScoring.streakBeforeMiss === 2 && results.collectibleScoring.streakAfterMiss === 0 &&
+    results.collectibleScoring.scoreKeptOnMiss,
+    `streak ${results.collectibleScoring.streakBeforeMiss} -> ${results.collectibleScoring.streakAfterMiss}, points kept: ${results.collectibleScoring.scoreKeptOnMiss}`],
+
+  ['a rail catches within its margin and not outside it',
+    results.railCatch.withinMargin && !results.railCatch.outsideLateral &&
+    !results.railCatch.outsideAngle && !results.railCatch.outsideHeight,
+    JSON.stringify(results.railCatch)],
+  ['grinding bleeds off speed', results.railFriction.after < results.railFriction.before,
+    `${results.railFriction.before} -> ${results.railFriction.after} m/s`],
+  ['blowing the balance stumbles off the rail, never crashes',
+    results.railFail.fellOff && results.railFail.stumbled && !results.railFail.crashed,
+    JSON.stringify(results.railFail)],
+  ['riding a grind out pops you airborne and pays',
+    results.railPop.popped && results.railPop.points > 0,
+    `${results.railPop.seconds}s held, ${results.railPop.points} pts`],
+  ['a curved rail keeps the rider exactly on its arc',
+    results.curvedRail.found ? results.curvedRail.worstDrift < 0.01 : true,
+    results.curvedRail.found
+      ? `worst drift ${results.curvedRail.worstDrift} m over ${results.curvedRail.frames} frames`
+      : 'no curved rail generated on this seed'],
 ];
 
 console.log(JSON.stringify(results, null, 2));

@@ -29,6 +29,18 @@ const TUNING = {
   butterBase: 45,        // ground rotation, same escalating curve as the air
   comboDecay: 4.5,       // seconds of nothing before the multiplier slides back
   comboMax: 8,
+
+  // Collectibles score through their own bucket, deliberately outside the
+  // trick multiplier — a run with zero tricks should still end on a positive
+  // number, and a star should never be the thing that resets your combo.
+  starPoints: 15,
+  gateBase: 20,
+  gateStreakBonus: 8,
+  gateStreakCap: 5,
+
+  // Grinds pay per second held, like a grab, and only bank on a clean pop-off.
+  grindPerSecond: 40,
+  grindPopBonus: 25,
 };
 
 /**
@@ -62,6 +74,10 @@ export class Score {
     this.biggestTrick = 0;
     this.tricksLanded = 0;
     this.log = [];           // every named award, for the results screen
+
+    this.starsCollected = 0;
+    this.gateStreak = 0;
+    this.gateBest = 0;
   }
 
   /** The run's best tricks, biggest first — what the results screen shows. */
@@ -153,6 +169,51 @@ export class Score {
       this.comboTimer = TUNING.comboDecay;
       this.tricksLanded++;
     }
+    return award;
+  }
+
+  /**
+   * A star, picked up in passing. Flat and unmultiplied — it needs no trick
+   * skill and no streak, just riding close enough to touch it.
+   */
+  onStar() {
+    this.starsCollected++;
+    this.total += TUNING.starPoints;
+    this.lastAward = { label: 'STAR', points: TUNING.starPoints, combo: 1 };
+    return { points: TUNING.starPoints, label: 'STAR' };
+  }
+
+  /**
+   * A gate, ridden through or missed. A miss costs nothing but the streak —
+   * consistent with the rest of the collectible track paying only in reward.
+   */
+  onGate(hit) {
+    if (!hit) {
+      this.gateStreak = 0;
+      return null;
+    }
+    this.gateStreak++;
+    this.gateBest = Math.max(this.gateBest, this.gateStreak);
+    const bonus = TUNING.gateStreakBonus * Math.min(this.gateStreak - 1, TUNING.gateStreakCap);
+    const points = TUNING.gateBase + bonus;
+    this.total += points;
+    const label = this.gateStreak > 1 ? `GATE ×${this.gateStreak}` : 'GATE';
+    this.lastAward = { label, points, combo: 1 };
+    return { points, label };
+  }
+
+  /**
+   * A grind, banked on a clean pop-off. Rate-based like a grab, and — same
+   * risk model as everything airborne — only paid if you rode away from it.
+   */
+  onGrindPopped(seconds) {
+    const points = Math.round(TUNING.grindPerSecond * seconds + TUNING.grindPopBonus);
+    if (points <= 0) return null;
+    const award = this._add(points, 'GRIND');
+    this.combo = Math.min(TUNING.comboMax, this.combo + 1);
+    this.comboTimer = TUNING.comboDecay;
+    this.tricksLanded++;
+    this.biggestTrick = Math.max(this.biggestTrick, award.points);
     return award;
   }
 

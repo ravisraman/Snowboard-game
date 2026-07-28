@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Course, COURSE } from '../world/Course.js';
 import { buildTerrain } from '../world/Terrain.js';
 import { buildKickers } from '../world/Kickers.js';
+import { buildRails } from '../world/Rails.js';
+import { buildCollectibles, STAR_PICKUP_RADIUS } from '../world/Collectibles.js';
 import { buildForest, bucketColliders } from '../world/Trees.js';
 import { buildVillage } from '../world/Village.js';
 import { buildSky, buildMountains, buildClouds, buildLighting, buildSkyProbe, HORIZON_COLOR } from '../world/Environment.js';
@@ -82,6 +84,7 @@ export class Game {
     this.crashTimer = 0;
     this.finishTimer = 0;
     this.previewTime = 0;
+    this._hitStop = 0;
 
     this.hud.onAction({
       onStart: () => this.start(),
@@ -124,6 +127,10 @@ export class Game {
     this.lights = buildLighting(this.scene, this.quality);
 
     this.scene.add(buildKickers(course));
+    this.scene.add(buildRails(course));
+
+    this.collectibles = buildCollectibles(course);
+    this.scene.add(this.collectibles.group);
 
     const village = buildVillage(course);
     this.scene.add(village.group);
@@ -180,6 +187,7 @@ export class Game {
     this.spray.reset();
     this.tracks.reset();
     this.score.reset();
+    this.collectibles.resetRun();
     this._grazed = new Set();
     this._bumped = new Set();
     this.chase.reset(this.rider);
@@ -428,7 +436,15 @@ export class Game {
         this._finishShown = true;
         this.hud.showFinish(this.rider, this.finishElapsed, this.score);
         this._fileRun({ finished: true, elapsed: this.finishElapsed });
+        this.audio.cheer();
       }
+    }
+
+    // A few frames of near-freeze on the best moments — real time, so it
+    // decays the same whether or not the run itself is also in slow motion.
+    if (this._hitStop > 0) {
+      this._hitStop = Math.max(0, this._hitStop - dt);
+      scale *= 0.12;
     }
 
     const sdt = dt * scale;
@@ -437,8 +453,30 @@ export class Game {
       this.elapsed += dt;
       this.rider.update(sdt, this.input);
       this.score.update(sdt, this.rider);
-      if (this.rider.trickLanded) this.score.onTrickLanded(this.rider.trickLanded);
+      if (this.rider.trickLanded) {
+        const award = this.score.onTrickLanded(this.rider.trickLanded);
+        if (award && this.rider.trickLanded.clean) {
+          const text = this._trickCallout(this.rider.trickLanded, award.points);
+          if (text) {
+            this.hud.flashCallout(text);
+            this._bigMoment(1.1, 0.05);
+            this.audio.cheer();
+          }
+        }
+      }
       if (this.rider.groundTrick) this.score.onGroundTrick(this.rider.groundTrick);
+      if (this.rider.grindPopped) {
+        const award = this.score.onGrindPopped(this.rider.grindPopped.seconds);
+        if (award) {
+          this.audio.trick(this.score.combo);
+          this.chase.kick(0.7);
+          if (award.points > 90) {
+            this.hud.flashCallout('RAIL GRIND!');
+            this._bigMoment(0.9, 0.04);
+            this.audio.cheer();
+          }
+        }
+      }
       if (this.rider.trickFailed) {
         // Washed out. No longer the end of the run, but it costs the streak and
         // most of the speed, and it needs to look and sound like a mistake.
@@ -450,6 +488,7 @@ export class Game {
       }
       this._emitAudio();
       this._checkHazards();
+      this._checkCollectibles();
       this._trackStuck(dt);
     } else if (this.state === 'finished') {
       // Coast into the village with the input ignored.
@@ -462,6 +501,7 @@ export class Game {
     this.skiers.update(sdt, this.rider.position.z);
     this.resort.update(sdt);
     this.forest.update(sdt);
+    this.collectibles.update(sdt);
     this.audio.update(this.rider, this.state === 'riding');
     this.tracks.update(this.rider);
     this._emitSpray(sdt);
@@ -503,6 +543,26 @@ export class Game {
   }
 
   /* ---------------------------------------------------------------- */
+
+  /** A kick and a few frames of hit-stop — the shared texture of a big moment. */
+  _bigMoment(kickAmount, hitStopSeconds = 0.05) {
+    this.chase.kick(kickAmount);
+    this._hitStop = Math.max(this._hitStop, hitStopSeconds);
+  }
+
+  /**
+   * What to shout for a landed trick, or nothing — most tricks are worth
+   * banking quietly, and a callout on every one would stop meaning anything.
+   */
+  _trickCallout(trick, points) {
+    if (points < 140) return null;
+    if (trick.spinDegrees >= 360 && trick.grabType) return 'SICK GRAB!';
+    if (trick.spinDegrees >= 360) return 'SICK SPIN!';
+    if (trick.stomped && points > 220) return 'STOMPED!';
+    if (trick.grabType) return 'NICE GRAB!';
+    if (trick.shifty) return 'SMOOTH SHIFTY!';
+    return points > 260 ? 'HUGE!' : null;
+  }
 
   /** Fires the one-shots off the rider's per-frame event flags. */
   _emitAudio() {
@@ -621,6 +681,47 @@ export class Game {
         this.chase.kick(1.1);
         this.spray.burst(r.position, 46, 4.5, r.powder);
         this.hud.flashBump();
+      }
+    }
+  }
+
+  /**
+   * Stars and gates. Neither can end a run — a star just sits there if you
+   * miss it, and a missed gate only costs the streak — so this never needs to
+   * distinguish "hit" from "hazard" the way `_checkHazards` does.
+   */
+  _checkCollectibles() {
+    const r = this.rider;
+    const { x, y, z } = r.position;
+
+    for (const s of this.collectibles.starsBucket.query(z)) {
+      if (s.collected) continue;
+      const dx = s.x - x;
+      const dz = s.z - z;
+      const dy = s.y - y;
+      if (dx * dx + dz * dz > STAR_PICKUP_RADIUS * STAR_PICKUP_RADIUS) continue;
+      if (Math.abs(dy) > 1.6) continue;
+      s.collected = true;
+      this.collectibles.collectStar(s.id);
+      this.score.onStar();
+      this.audio.trick(1);
+      this.spray.burst(r.position, 10, 2, 0);
+    }
+
+    for (const g of this.collectibles.gatesBucket.query(z)) {
+      if (g.passed || z < g.z) continue;
+      g.passed = true;
+      const t = (x - g.x) * g.dirZ - (z - g.z) * g.dirX;
+      const hit = Math.abs(t) < g.halfWidth;
+      // Both the hit and the miss go through the score — a miss resets the
+      // streak but is otherwise silent, exactly like a combo lapsing.
+      const award = this.score.onGate(hit);
+      if (award) {
+        this.audio.trick(1);
+        if (this.score.gateStreak >= 3 && this.score.gateStreak % 2 === 1) {
+          this.hud.flashCallout(`GATE STREAK ×${this.score.gateStreak}!`);
+          this._bigMoment(0.5, 0);
+        }
       }
     }
   }

@@ -69,6 +69,18 @@ const TUNING = {
   stumbleSeconds: 1.1,    // how long a clipped skier stays with you
   stumbleScrub: 0.45,     // fraction of speed kept through the hit
 
+  // Grinds. The catch margin is deliberately generous and independent of the
+  // rail's visual width — you should be able to hop on without threading a
+  // needle. Falling off is a stumble, never a crash.
+  grindCatchRadius: 0.75,      // metres either side of the rail's centreline
+  grindCatchVertical: 0.85,    // metres above/below the rail's surface
+  grindApproachAngleMax: 0.87, // ~50 degrees off the rail's own heading
+  grindFriction: 2.6,          // m/s^2 bled off while grinding
+  grindBalanceStiffness: 30,
+  grindBalanceDamping: 6,
+  grindBalanceFailThreshold: 1.0,
+  grindPopSpeed: 4.5,
+
   // Overwritten by `Difficulty.js`, which owns the handful of values that
   // differ between the gentle tuning and the original one.
   autoArmSpin: false,
@@ -94,6 +106,8 @@ const GRAB_POSES = {
   nose:   { arm: 'front', x: 0.0,   z: 0.6,   fold: 0.6,  tweak: 0.12 },
   method: { arm: 'front', x: -0.19, z: -0.02, fold: 0.32, tweak: -0.62 },
 };
+
+const EMPTY_RAILS = [];
 
 export class Rider {
   constructor(course) {
@@ -149,6 +163,16 @@ export class Rider {
     this.trickFailed = false;
     this.spinArmed = false;
     this.stumbleTime = 0;
+
+    // Grinds: a third state alongside grounded/airborne, entirely handled by
+    // `_updateGrind` rather than threaded through the ground/air branches.
+    this.grinding = false;
+    this.grindRail = null;
+    this.grindS = 0;
+    this.grindTime = 0;
+    this.grindBalance = 0;
+    this.grindBalanceVel = 0;
+    this.grindPopped = null;
 
     // Butters: riding on one end of the board with the other in the air.
     this.pressing = false;
@@ -210,7 +234,21 @@ export class Rider {
    * ============================================================== */
 
   update(dt, input) {
+    // One-frame events, cleared before any branch. `crashed` and `grinding`
+    // both skip the rest of this method, and a stale event left over from the
+    // last normal-path frame would otherwise fire again in Game.js on every
+    // subsequent frame of a crash or a grind.
+    this.trickLanded = null;
+    this.trickFailed = false;
+    this.groundTrick = null;
+    this.justLaunched = false;
+    this.justLanded = 0;
+    this.skated = 0;
+    this.popped = 0;
+    this.grindPopped = null;
+
     if (this.crashed) return this._updateCrash(dt);
+    if (this.grinding) return this._updateGrind(dt, input);
 
     const c = this.course;
 
@@ -458,6 +496,130 @@ export class Rider {
     if (this.stumbleTime > 0) this.stumbleTime = Math.max(0, this.stumbleTime - dt);
 
     this._animate(dt, slope, n);
+
+    // Checked last, against this frame's resolved position — a catch this
+    // frame takes effect on the next one, the same way `crashed` does.
+    this._tryCatchRail();
+  }
+
+  /* ================================================================
+   * Grinds
+   * ============================================================== */
+
+  /**
+   * Looks for a rail close enough, at the right height and roughly parallel
+   * to the way the rider is travelling. Deliberately generous on all three —
+   * a grind you have to line up pixel-perfect is not a move a kid discovers
+   * by accident, and discovering it by accident is most of the fun of one.
+   */
+  _tryCatchRail() {
+    if (this.crashed || this.grinding || this.stumbleTime > 0) return;
+    const c = this.course;
+    const near = c.railsNear ? c.railsNear(this.position.z) : EMPTY_RAILS;
+    for (const rail of near) {
+      const dx = this.position.x - rail.x;
+      const dz = this.position.z - rail.z;
+      let s = dx * rail.dirX + dz * rail.dirZ;
+      if (s < -0.6 || s > rail.length + 0.6) continue;
+      s = clamp(s, 0, rail.length);
+
+      const p = c.railPointAt(rail, s);
+      const lat = Math.hypot(this.position.x - p.x, this.position.z - p.z);
+      if (lat > TUNING.grindCatchRadius) continue;
+
+      const railY = c.railHeightAt(rail, s);
+      if (Math.abs(this.position.y - railY) > TUNING.grindCatchVertical) continue;
+
+      const tan = c.railTangentAt(rail, s);
+      const railYaw = Math.atan2(tan.x, tan.z);
+      const travelYaw = Math.atan2(this.forwardX, this.forwardZ);
+      let da = Math.abs(angleDelta(railYaw, travelYaw));
+      if (da > Math.PI / 2) da = Math.PI - da; // either direction along the rail is a valid catch
+      if (da > TUNING.grindApproachAngleMax) continue;
+
+      this._beginGrind(rail, s);
+      return;
+    }
+  }
+
+  _beginGrind(rail, s0) {
+    this.grinding = true;
+    this.grindRail = rail;
+    this.grindS = s0;
+    this.grindTime = 0;
+    this.grindBalance = 0;
+    this.grindBalanceVel = 0;
+    this.grounded = false;
+    this.vy = 0;
+    this.pressing = false;
+    this.spinArmed = false;
+  }
+
+  _updateGrind(dt, input) {
+    const rail = this.grindRail;
+    const c = this.course;
+
+    this.grindTime += dt;
+    this.grindS += this.speed * dt;
+    this.speed = Math.max(0, this.speed - TUNING.grindFriction * dt);
+
+    // Steering drives a spring-damped balance meter, the same shape as the
+    // edge-angle spring — you can't snap straight upright, you have to ride
+    // the wobble back down.
+    this.grindBalanceVel += (input.steer - this.grindBalance) * TUNING.grindBalanceStiffness * dt;
+    this.grindBalanceVel *= Math.exp(-TUNING.grindBalanceDamping * dt);
+    this.grindBalance = clamp(this.grindBalance + this.grindBalanceVel * dt, -1.4, 1.4);
+
+    if (Math.abs(this.grindBalance) > TUNING.grindBalanceFailThreshold) {
+      this._fallOffRail();
+      return;
+    }
+
+    if (this.grindS >= rail.length || input.jumpPressed) {
+      this._popOffRail(input.jumpPressed && this.grindS < rail.length);
+      return;
+    }
+
+    const s = clamp(this.grindS, 0, rail.length);
+    const p = c.railPointAt(rail, s);
+    const tan = c.railTangentAt(rail, s);
+    this.position.x = p.x;
+    this.position.z = p.z;
+    this.position.y = c.railHeightAt(rail, s) + 0.02;
+    this.yaw = Math.atan2(tan.x, tan.z);
+    this.boardYaw = this.yaw;
+    this.vy = 0;
+    this.airTime = 0;
+
+    this._animateGrind(dt);
+  }
+
+  /** Balance lost. A stumble, never a crash — you fall to the snow, not off the mountain. */
+  _fallOffRail() {
+    this.grinding = false;
+    this.grindRail = null;
+    this.grounded = false;
+    this.vy = -0.5;
+    this.stumble();
+    this._beginAir();
+  }
+
+  /** Reached the end, or popped early. Airborne, and paid for whatever was held. */
+  _popOffRail(early) {
+    this.grinding = false;
+    this.grindRail = null;
+    this.grounded = false;
+    this.vy = Math.max(this.vy, 0) + TUNING.grindPopSpeed * (early ? 1.3 : 1);
+    this.justLaunched = true;
+    this.grindPopped = { seconds: this.grindTime };
+    this._beginAir();
+  }
+
+  /** Reuses the ordinary pose pipeline: the balance meter stands in for edge lean. */
+  _animateGrind(dt) {
+    this.lean = this.grindBalance * TUNING.maxLean;
+    this.carveIntensity = clamp(Math.abs(this.grindBalance), 0, 1);
+    this._animate(dt, 0, this._normal);
   }
 
   /** Resets the per-air trick bookkeeping. Called however the rider left the snow. */

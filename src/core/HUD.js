@@ -37,6 +37,10 @@ export class HUD {
       airValue: $('air-value'),
       powder: $('powder-tag'),
       bump: $('bump-tag'),
+      starCount: $('star-count'),
+      callout: $('big-callout'),
+      finishStars: $('finish-stars'),
+      crashStars: $('crash-stars'),
       overlay: $('overlay'),
       title: $('screen-title'),
       crash: $('screen-crash'),
@@ -80,7 +84,7 @@ export class HUD {
 
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
-      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1, stars: -1,
     };
     this.best = this._load(BEST_TIME_KEY);
     this.bestScore = this._load(BEST_SCORE_KEY);
@@ -217,6 +221,20 @@ export class HUD {
     el.textContent = text;
     el.classList.remove('on');
     void el.offsetWidth;   // reflow, or the re-add is coalesced away
+    el.classList.add('on');
+  }
+
+  /**
+   * The rare, punchy exclamation for a genuinely great moment. Separate from
+   * the trick-points popup, which fires for everything — this fires for the
+   * handful of things worth a reaction.
+   */
+  flashCallout(text) {
+    const el = this.el.callout;
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('on');
+    void el.offsetWidth;
     el.classList.add('on');
   }
 
@@ -372,6 +390,12 @@ export class HUD {
     }
 
     if (score.lastAward) this._popTrick(score.lastAward);
+
+    const stars = score.starsCollected ?? 0;
+    if (stars !== this._last.stars) {
+      this._last.stars = stars;
+      if (this.el.starCount) this.el.starCount.textContent = stars;
+    }
   }
 
   /** Throws the award up on screen. Retriggering restarts the animation. */
@@ -515,6 +539,7 @@ export class HUD {
     this.el.crashTime.textContent = formatTime(elapsed);
     this.el.crashDist.textContent = `${Math.round(distance)} m`;
     this.el.crashTop.textContent = `${Math.round(rider.topSpeed * 3.6)} km/h`;
+    if (this.el.crashStars) this.el.crashStars.textContent = score?.starsCollected ?? 0;
     this._fillLog(this.el.crashLog, score);
     this.showScreen('crash');
   }
@@ -530,6 +555,7 @@ export class HUD {
       this.bestScore === null ? '—' : Math.round(this.bestScore).toLocaleString('en-US');
     this.el.finishBestScore.style.color = isBestScore ? '#8ee6a0' : '';
     this.el.finishTricks.textContent = score?.tricksLanded ?? 0;
+    if (this.el.finishStars) this.el.finishStars.textContent = score?.starsCollected ?? 0;
 
     this.el.finishTime.textContent = formatTime(elapsed);
     this.el.finishBest.textContent = this.best === null ? '—' : formatTime(this.best);
@@ -546,7 +572,7 @@ export class HUD {
     this.el.bump?.classList.remove('on');
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
-      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1,
+      score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1, stars: -1,
     };
     for (const t of this._ticks ?? []) {
       t.passed = false;

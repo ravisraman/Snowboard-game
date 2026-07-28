@@ -40,6 +40,8 @@ export class Course {
     this._buildBaseProfile();
     this._buildKickers();
     this._indexKickers();
+    this._buildRails();
+    this._indexRails();
   }
 
   /* ------------------------------------------------------------------
@@ -227,6 +229,23 @@ export class Course {
       });
       z += 150 + rng() * 135;
     }
+
+    // One signature jump: a spine down the middle, wide enough that the
+    // approach line decides which way it throws you. Picked from the middle
+    // of the mountain rather than placed separately — it reuses the same
+    // record and the same `kickerProfile()` the ordinary kickers use, just
+    // with a wider table and the `hip` flag set.
+    if (this.kickers.length) {
+      const mid = COURSE.finishZ * 0.5;
+      let spine = this.kickers[0];
+      for (const k of this.kickers) {
+        if (Math.abs(k.z - mid) < Math.abs(spine.z - mid)) spine = k;
+      }
+      spine.hip = true;
+      spine.hipAngle = 0.36;                 // ~20 degrees of split either side
+      spine.halfWidth = Math.max(spine.halfWidth, 6.5);
+      spine.length = Math.max(spine.length, 10);
+    }
   }
 
   /** Bucket kickers by z so the per-frame height lookup stays O(1). */
@@ -248,13 +267,35 @@ export class Course {
     return this._kickerBuckets.get(Math.floor(z / this._kickerBucketSize)) ?? EMPTY;
   }
 
-  /** Height a single kicker adds at a world position. */
+  /**
+   * Height a single kicker adds at a world position.
+   *
+   * A `hip` kicker splits in two down its own centreline: each half is the
+   * ordinary ramp, rotated a fixed angle away from the other. The two halves
+   * are computed independently and picked by which side of the spine `(x,z)`
+   * falls on, so the ramp's steepest gradient — the direction it actually
+   * launches you — differs depending on which half you rode up. Nothing else
+   * about it is special: it is still sampled by the same mesh builder and
+   * read by the same physics as an ordinary kicker.
+   */
   kickerProfile(k, x, z) {
     const dx = x - k.x;
     const dz = z - k.z;
-    const s = dx * k.dirX + dz * k.dirZ;       // along the ramp
+
+    let dirX = k.dirX;
+    let dirZ = k.dirZ;
+    if (k.hip) {
+      const side = dx * k.dirZ - dz * k.dirX >= 0 ? 1 : -1;
+      const angle = side * k.hipAngle;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      dirX = k.dirX * cos + k.dirZ * sin;
+      dirZ = -k.dirX * sin + k.dirZ * cos;
+    }
+
+    const s = dx * dirX + dz * dirZ;           // along the ramp
     if (s < 0 || s > k.length) return 0;
-    const t = dx * k.dirZ - dz * k.dirX;       // across the ramp
+    const t = dx * dirZ - dz * dirX;           // across the ramp
     const at = Math.abs(t);
     if (at > k.halfWidth) return 0;
 
@@ -304,6 +345,86 @@ export class Course {
       if (s > -pad && s < k.length + pad && Math.abs(t) < k.halfWidth + pad) return true;
     }
     return false;
+  }
+
+  /* ------------------------------------------------------------------
+   * Rails
+   *
+   * A rail is a strip of ground-following height offset by a fixed lift, the
+   * same `dirX/dirZ`-along, perpendicular-across parametrisation kickers use.
+   * A minority bend, via `curveRadius`: a gentle quadratic drift across the
+   * rail's length that approximates an arc without needing real arc-length
+   * parametrisation over such a short span. Rails do not feed into
+   * `terrainHeight`/`kickerHeight` — the snow underneath stays real snow, so
+   * falling off drops you straight to it rather than ejecting you.
+   * ---------------------------------------------------------------- */
+
+  _buildRails() {
+    const rng = this.rng;
+    this.rails = [];
+    let z = 260;
+    while (z < COURSE.finishZ - 200) {
+      if (rng() < 0.5 && !this.onKicker(this.centerX(z), z, 10)) {
+        const curved = rng() < 0.35;
+        const len = 9 + rng() * 7;
+        const height = 0.55 + rng() * 0.35;
+        const offset = rng.spread(this.trackHalfWidth - 6);
+        const cx = this.centerX(z) + offset * Math.cos(Math.atan(this.centerSlope(z)));
+        const tan = this.trackTangent(z);
+        this.rails.push({
+          x: cx,
+          z,
+          dirX: tan.x,
+          dirZ: tan.z,
+          length: len,
+          height,
+          halfWidth: 0.16,      // visual width — the catch margin is separate and wider
+          curveRadius: curved ? (rng() < 0.5 ? 1 : -1) * (35 + rng() * 25) : 0,
+        });
+      }
+      z += 130 + rng() * 140;
+    }
+  }
+
+  _indexRails() {
+    this._railBucketSize = 64;
+    this._railBuckets = new Map();
+    for (const rail of this.rails) {
+      const reach = rail.length + 6;
+      const from = Math.floor((rail.z - reach) / this._railBucketSize);
+      const to = Math.floor((rail.z + reach) / this._railBucketSize);
+      for (let b = from; b <= to; b++) {
+        if (!this._railBuckets.has(b)) this._railBuckets.set(b, []);
+        this._railBuckets.get(b).push(rail);
+      }
+    }
+  }
+
+  railsNear(z) {
+    return this._railBuckets.get(Math.floor(z / this._railBucketSize)) ?? EMPTY;
+  }
+
+  /** World position at arc-length `s` along a rail, 0 at the foot. */
+  railPointAt(rail, s) {
+    const px = rail.dirZ;
+    const pz = -rail.dirX;
+    const bend = rail.curveRadius ? (s * s) / (2 * rail.curveRadius) : 0;
+    return { x: rail.x + rail.dirX * s + px * bend, z: rail.z + rail.dirZ * s + pz * bend };
+  }
+
+  /** Unit tangent at arc-length `s` — where the rail is heading at that point. */
+  railTangentAt(rail, s) {
+    const dBend = rail.curveRadius ? s / rail.curveRadius : 0;
+    const tx = rail.dirX + rail.dirZ * dBend;
+    const tz = rail.dirZ - rail.dirX * dBend;
+    const len = Math.hypot(tx, tz) || 1;
+    return { x: tx / len, z: tz / len };
+  }
+
+  /** Height of the rail's riding surface at arc-length `s`. */
+  railHeightAt(rail, s) {
+    const p = this.railPointAt(rail, s);
+    return this.terrainHeight(p.x, p.z) + rail.height;
   }
 }
 

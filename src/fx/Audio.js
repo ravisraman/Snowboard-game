@@ -244,4 +244,18 @@ export class GameAudio {
   fail() {
     this._burst({ duration: 0.3, gain: 0.2, freq: 700, sweep: 0.3 });
   }
+
+  /**
+   * A crowd cheer for the handful of moments that earn one — a huge trick,
+   * riding a grind out clean, the finish gate. One long swelling burst of
+   * noise stands in for the roar; three staggered, randomly-pitched whoops on
+   * top break up what would otherwise read as a single filtered hiss.
+   */
+  cheer() {
+    this._burst({ duration: 1.1, gain: 0.2, freq: 1600, type: 'bandpass', q: 0.6, sweep: 1.6 });
+    for (let i = 0; i < 3; i++) {
+      const root = 480 + Math.random() * 340;
+      setTimeout(() => this._tone({ from: root, to: root * 1.4, duration: 0.32, gain: 0.045, type: 'triangle' }), i * 90);
+    }
+  }
 }
