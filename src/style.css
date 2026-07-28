@@ -891,7 +891,12 @@ body.is-touch .touch { display: block; }
    features under it, and the pills stay for the one-word choice they suit. */
 .runs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Sized to the cards rather than to a fixed count of them, and centred. A
+     hard `repeat(3, 1fr)` is right until the day the run list is not three
+     long — one run then sits in column one looking like a layout bug, and
+     four would squeeze. This holds either way. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 176px));
+  justify-content: center;
   gap: 8px;
   width: min(560px, 100%);
   margin: 0 auto;

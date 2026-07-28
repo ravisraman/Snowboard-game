@@ -1,10 +1,9 @@
 import { clamp, formatTime } from './mathx.js';
 import { CONTROL_GROUPS, TRICK_GUIDE, SCORING_NOTE } from './Controls.js';
 import { presetInfo } from './Difficulty.js';
-// The run list. A stub until `src/world/Runs.js` lands — see the header of
-// `Runs.stub.js`; swapping to the real presets is one import there and
-// nothing at all here.
-import { RUNS, runInfo } from './Runs.stub.js';
+// The run list, already turned into something renderable — the picker never
+// touches `world/Runs.js` directly.
+import { RUNS, runInfo } from './RunSelect.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and

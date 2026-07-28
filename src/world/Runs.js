@@ -56,7 +56,18 @@ export const CLASSIC = {
   /* --- identity -------------------------------------------------------- */
   id: 'classic',
   name: 'Classic Descent',
-  blurb: 'Two steep pitches, a long wandering piste, and a runout to the village.',
+  blurb: 'Wide open groomers all the way to the village.',
+  /**
+   * Card copy for the run picker. Kept here rather than in the UI so that a
+   * new run is still one object in one file — the terrain and the way the
+   * player is told about it have no business drifting apart.
+   *
+   * `grade` is 1-3, gentlest first, and drives the dots on the card: a child
+   * who cannot yet read the blurb can still see which run is the easy one.
+   */
+  grade: 1,
+  hint: 'GENTLE',
+  features: ['Big friendly kickers', 'Room to make mistakes'],
   /** Default world seed. A score is only comparable with one from the same mountain. */
   seed: 20240117,
 

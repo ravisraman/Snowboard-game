@@ -1,23 +1,12 @@
 /**
- * Which mountain you are about to ride.
+ * Which mountain you are about to ride — the player's side of the choice.
  *
- * ┌──────────────────────────────────────────────────────────────────────┐
- * │ STUB. The real run presets are being written as `src/world/Runs.js`, │
- * │ and this file exists so the picker, the HUD and the leaderboard      │
- * │ could be built and tested before that landed.                        │
- * │                                                                      │
- * │ To swap it for the real thing, replace the `RUN_PRESETS` array below │
- * │ with one import:                                                     │
- * │                                                                      │
- * │     import { RUNS as RUN_PRESETS } from '../world/Runs.js';          │
- * │                                                                      │
- * │ and delete the literal. Nothing else in this file changes, and       │
- * │ nothing outside it changes at all: every consumer goes through       │
- * │ `runInfo()`, and `normalise()` below fills in any field the real     │
- * │ presets do not happen to carry. The contract this was written        │
- * │ against is deliberately tiny — `id` and `name` are the only fields   │
- * │ that must already exist.                                            │
- * └──────────────────────────────────────────────────────────────────────┘
+ * `world/Runs.js` describes the terrain: grade curves, tree density, where the
+ * kickers go. This file is everything *around* that — turning a preset into a
+ * card, remembering which one was picked, and carrying a drop-in across the
+ * reload that switching mountains needs. Keeping the two apart means the
+ * picker never has to know what a bell curve is, and the course generator
+ * never has to know what a card looks like.
  *
  * A run is a *place*, not a difficulty. The two are picked separately and
  * scored separately: CRUISE down the Backcountry is a real thing somebody
@@ -25,46 +14,15 @@
  * Classic one.
  */
 
-const RUN_PRESETS = [
-  {
-    id: 'classic',
-    name: 'CLASSIC',
-    // The seed the mountain has always been built from. Keeping it explicit
-    // here rather than leaning on `new Course()`'s default is what guarantees
-    // a player who never opens the picker gets exactly the run they had.
-    seed: 20240117,
-    grade: 1,
-    hint: 'GENTLE',
-    description: 'Wide open groomers all the way to the village.',
-    features: ['Big friendly kickers', 'Room to make mistakes'],
-  },
-  {
-    id: 'park',
-    name: 'PARK',
-    seed: 70310,
-    grade: 2,
-    hint: 'PLAYFUL',
-    description: 'A built line of rails, lips and a tunnel under the ridge.',
-    features: ['Rails and step-downs', 'A fork — pick your side'],
-  },
-  {
-    id: 'backcountry',
-    name: 'BACKCOUNTRY',
-    seed: 88421,
-    grade: 3,
-    hint: 'WILD',
-    description: 'A narrow thread through the trees, and nothing is groomed.',
-    features: ['Moguls and gap jumps', 'Banked walls, dense timber'],
-  },
-];
+import { RUNS as RUN_PRESETS } from '../world/Runs.js';
 
 /**
- * Fills in whatever the presets left out.
+ * Fills in whatever a preset left out.
  *
- * The real `Runs.js` is being written to describe *terrain*, so it may well
- * arrive with no display copy on it at all. Rather than make the picker
- * defensive in three places, everything it needs is guaranteed here — a run
- * with nothing but an `id` still renders as a card the player can choose.
+ * `world/Runs.js` exists to describe *terrain*, so a run may arrive carrying
+ * nothing the picker can render. Rather than make the UI defensive in three
+ * places, everything it needs is guaranteed here — a run with nothing but an
+ * `id` still comes out as a card the player can choose.
  */
 function normalise(preset, index) {
   const id = String(preset.id ?? `run${index}`);

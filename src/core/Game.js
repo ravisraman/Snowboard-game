@@ -20,9 +20,8 @@ import { HUD } from './HUD.js';
 import { Score } from './Score.js';
 import { TouchControls } from './TouchControls.js';
 import { difficulty, applyDifficulty, loadDifficulty, presetInfo } from './Difficulty.js';
-// The run list. A stub until `src/world/Runs.js` lands — see the header of
-// `Runs.stub.js`; swapping to the real presets is one import there.
-import { runInfo, loadRun, saveRun, armDropIn, takeDropIn } from './Runs.stub.js';
+// Which mountain, and remembering the choice across the reload a switch needs.
+import { runInfo, loadRun, saveRun, armDropIn, takeDropIn } from './RunSelect.js';
 import { Leaderboard } from '../services/Leaderboard.js';
 import { Profile } from '../services/Profile.js';
 import { clamp } from './mathx.js';
@@ -328,7 +327,7 @@ export class Game {
     this.audio.unlock();
     if (this.state === 'riding') return;
     // A different mountain than the one standing has to be built, and a reload
-    // is how that is done — see the note in `Runs.stub.js`. The press is
+    // is how that is done — see the note in `RunSelect.js`. The press is
     // carried across it, so this reads as a slightly slower drop-in rather
     // than as a button that did nothing.
     if (this.runId !== this._builtRunId) {
