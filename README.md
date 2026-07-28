@@ -76,6 +76,46 @@ Arrow keys work too, and the pause panel lists all of this in game so you never
 have to come back here. Your best score and best time are both kept in
 `localStorage`.
 
+## Runs
+
+Three mountains, picked on the title screen and remembered. A run is a *place*,
+not a difficulty — the two are chosen separately and scored separately, so
+CRUISE down the Backcountry is a real thing somebody wants and a Park score has
+no business sitting in the same table as a Classic one.
+
+| Run | | What it is |
+| --- | --- | --- |
+| **Classic Descent** | ●○○ | Wide open groomers to the village. The mountain the game has always shipped, unchanged to the last decimal place — three digest assertions in `tools/check-mechanics.mjs` say so. |
+| **The Park** | ●●○ | A built jump line: sixteen kickers, thirteen rails, a step-down, a gap jump, a spine, two tunnels, and a fork. |
+| **Backcountry** | ●●● | Half the piste width, twice the trees, six hundred metres of moguls, and a gap jump. |
+
+Every run is one object in [`src/world/Runs.js`](src/world/Runs.js), stating only
+what makes it different from Classic — the fall line's bell curves, how wide the
+corduroy is, how often a kicker appears, where the trees stand. Nothing in
+`Course.js` or `Trees.js` knows how many runs there are.
+
+Two of the features are worth a note because they are not what they look like:
+
+- **The fork** is not a branch in a graph, or a second centre line, or a lane
+  the rider is committed to. It is a *ridge in the height field* — at every
+  (x, z) there is still exactly one ground height, so collision, the mesh, the
+  trees and the tracks ribbon all pick it up for free. What makes it a choice is
+  the rider's lateral gravity coupling: the flanks tilt across the board and
+  turn the nose away from the crest, so an approach a metre off centre is
+  carried into that lane and stays there. Ride the crest dead straight and you
+  go over it, for the price of the climb and a run through untracked powder.
+  There is no code anywhere that knows the word "lane".
+- **The tunnels** are spectacle and nothing else. No ceiling collision, nothing
+  in `_checkHazards` that knows they exist, and an arch that scales itself up
+  until it clears the highest point a rider can reach off any kicker inside it.
+  What changes is the room: the light drops, the fog closes in, and a low-pass
+  drags down over the two continuous audio voices, all blended over thirty
+  metres so a portal at 36 m/s reads as a transition rather than a cut.
+
+`node tools/audit-runs.mjs` prints where every feature actually lands on every
+run, and fails on the overlaps that matter — a jump promoted onto the fork's
+divider, say. Re-run it after changing any seed or spacing.
+
 ## Difficulty
 
 The title screen offers **CRUISE** and **ORIGINAL**, and remembers which you
