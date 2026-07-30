@@ -1641,7 +1641,20 @@ results.runs = await page.evaluate(async () => {
     };
   };
 
+  /*
+   * Ride on the tuning the game ships on — and *report* which one that was.
+   *
+   * `TUNING` in `Rider.js` is module-level state that `setDifficulty` mutates,
+   * and this block reaches `Rider` through a dynamic import while the running
+   * game reached it through its own import. When those two specifiers resolve
+   * to different module instances there are two `TUNING` objects, this call
+   * lands on the wrong one, and the ride is silently measured on `original`
+   * instead. That happened: the same three runs reported 91/103/95 seconds one
+   * day and 137/142/130 the next, with nothing between them but a dev-server
+   * restart. Both were honest measurements of *a* tuning; neither said which.
+   */
   g.setDifficulty('cruise');
+  const tuning = g.difficultyName;
   const runs = PICKER_RUNS.map((run) => {
     // Built from the *picker's* object, exactly as `Game.js` does it — which
     // is the only way failure mode 1 is visible.
@@ -1681,7 +1694,7 @@ results.runs = await page.evaluate(async () => {
       // plateau in the kicker field and the ridge is one in the terrain
       // field, and they are summed by two systems that have never met.
       deckedInFork: course.kickers.filter((k) => k.deck && course.forkAmount(k.z) > 0).length,
-      ride: rideWhole(course, new Rider(course)),
+      ride: { ...rideWhole(course, new Rider(course)), tuning },
     };
   });
   g.setDifficulty('original');
@@ -3081,6 +3094,7 @@ const checks = [
 
   ['every run can be ridden from the gate to the finish',
     results.runs.every((r) => r.ride.finished && !r.ride.crashed),
+    `on ${results.runs[0].ride.tuning}: ` +
     results.runs.map((r) => `${r.id} ${r.ride.seconds}s to z=${r.ride.endZ}`).join(', ')],
 
   ['and they do not all ride the same',

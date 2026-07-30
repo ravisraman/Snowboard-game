@@ -27,6 +27,8 @@ mkdirSync(OUT, { recursive: true });
 /** @type {{ run: string, name: string, z: number, lane?: number }[]} */
 const SHOTS = [
   { run: 'classic', name: 'hip', z: 1360 },
+  { run: 'classic', name: 'stars', z: 500 },
+  { run: 'classic', name: 'gates', z: 1015 },
 
   { run: 'park', name: 'stepdown-approach', z: 905 },
   { run: 'park', name: 'tunnel-mouth', z: 985 },

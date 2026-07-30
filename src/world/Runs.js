@@ -702,8 +702,15 @@ export const CLASSIC = {
       endMargin: 40,
       /** @type {Span} z between candidates. */
       spacing: { min: 8, range: 9 },
-      /** Probability a candidate is discarded — raise it for a sparser run. */
-      skipChance: 0.6,
+      /**
+       * Probability a candidate is discarded — raise it for a sparser run.
+       *
+       * 0.4 keeps three in five, which is the density Classic has always had.
+       * The number used to be 0.6 and meant the opposite of what it said (the
+       * old code discarded when `rng() > 0.6`), so reading it the documented
+       * way cost the run a third of its stars until this was set to match.
+       */
+      skipChance: 0.4,
       kickerPad: 8,
       /** Probability a star sits near the line rather than off it. */
       detourChance: 0.72,
@@ -720,19 +727,31 @@ export const CLASSIC = {
       /** Only place where |centerSlope| is below this — a gate on a hard traverse is unfair. */
       maxSlope: 0.3,
       kickerPad: 12,
-      chance: 0.55,
+      /**
+       * Probability a *clear* site becomes a slalom. Read against `gapAfter`,
+       * not on its own: at 0.55 against a 110 m gap the run carried a slalom
+       * every couple of hundred metres, which turned a thing you were pleased
+       * to come across into scenery you rode through.
+       */
+      chance: 0.4,
       /** Poles per slalom group: `min + rng.int(0, extra)`. */
-      count: { min: 3, extra: 2 },
+      count: { min: 4, extra: 2 },
       /** @type {Span} z between poles in a group. */
       spacing: { min: 15, range: 5 },
-      /** @type {Span} How far the line weaves side to side. */
+      /**
+       * @type {Span} How far the line weaves side to side.
+       *
+       * A ceiling, not a promise. `buildCollectibles` clamps it so the outer
+       * pole of every gate stays a metre inside the corduroy — on a narrow run
+       * the drawn weave is regularly wider than the piste.
+       */
       weave: { min: 5, range: 3 },
       /** @type {Span} Half the gap between the two poles of a gate. */
       halfWidth: { min: 3.4, range: 0.8 },
       /** Gap after a group: `count * gapPerGate + gapAfter`. */
       gapPerGate: 20,
       /** @type {Span} */
-      gapAfter: { min: 110, range: 90 },
+      gapAfter: { min: 280, range: 180 },
       /** z step taken when a candidate site is rejected. */
       stride: 45,
     },
@@ -932,11 +951,20 @@ export const PARK = defineRun({
     },
   },
 
-  /** Denser stars, fewer slalom gates: this run's rhythm is the jump line. */
+  /**
+   * Denser stars, and slaloms cut down to fit.
+   *
+   * A four-to-six pole group needs a hundred metres clear of every kicker,
+   * rail and the fork, and this run does not have a hundred such metres
+   * anywhere — asking for Classic's groups here produced exactly zero gates.
+   * Three poles and a finer search stride finds the gaps between features
+   * instead of failing to fit between them, which is the honest way to have
+   * "a few" rather than the accidental way to have none.
+   */
   collectibles: {
     seed: 4409,
-    stars: { skipChance: 0.45 },
-    gates: { chance: 0.3 },
+    stars: { skipChance: 0.28 },
+    gates: { chance: 0.5, count: { min: 3, extra: 0 }, stride: 25, gapAfter: { min: 200, range: 120 } },
   },
 });
 
@@ -1102,7 +1130,7 @@ export const BACKCOUNTRY = defineRun({
    */
   collectibles: {
     seed: 9151,
-    stars: { skipChance: 0.55, offTrackExtra: 6, detourChance: 0.6 },
+    stars: { skipChance: 0.5, offTrackExtra: 6, detourChance: 0.6 },
     gates: { chance: 0.28 },
   },
 });
