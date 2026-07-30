@@ -1701,6 +1701,70 @@ results.runs = await page.evaluate(async () => {
   return runs;
 });
 
+/* ==================================================================
+ * CHARACTERS — that a costume is only a costume.
+ *
+ * Three characters share one skeleton, one set of poses and one physics model.
+ * Two things have to hold for that to be true rather than merely intended:
+ *
+ *   1. Every character still has every node `Rider.js` reaches for. The one
+ *      that bites is `bobble` — the beanie's pom, swung every frame without
+ *      anyone asking what it is attached to. The fox has no pom and the wizard
+ *      has a hat instead, and if either of them simply omitted the node the
+ *      game would throw on the first frame of the first run.
+ *
+ *   2. They ride identically. A character that is fractionally faster is not a
+ *      costume, it is a difficulty setting hidden in the dressing-up box, and
+ *      the leaderboard does not split by character — so this is what makes
+ *      that table honest.
+ * ================================================================ */
+results.characters = await page.evaluate(async () => {
+  const { CHARACTERS } = await import('/src/entities/Characters.js');
+  const { Course } = await import('/src/world/Course.js');
+  const { Rider } = await import('/src/entities/Rider.js');
+  const { CLASSIC } = await import('/src/world/Runs.js');
+
+  const dt = 1 / 120;
+  const NONE = { steer: 0, tuck: false, ollie: false, grab: null };
+  const course = new Course(CLASSIC.seed, CLASSIC);
+
+  return CHARACTERS.map((c) => {
+    const rider = new Rider(course, c.id);
+    const m = rider.model;
+
+    // Ridden with a fixed input rather than a follow-the-line autopilot: the
+    // point is a byte-comparable trajectory, and a controller that reacts to
+    // position would hide a small difference by steering around it.
+    rider.reset();
+    for (let i = 0; i < 120 * 40; i++) rider.update(dt, { ...NONE, steer: 0.35, tuck: true });
+
+    let meshes = 0;
+    let tris = 0;
+    m.root.traverse((o) => {
+      if (!o.isMesh) return;
+      meshes++;
+      const pos = o.geometry?.attributes?.position;
+      if (pos) tris += pos.count / 3;
+    });
+
+    return {
+      id: c.id,
+      // The nodes the animation code dereferences without checking.
+      nodes: ['root', 'tilt', 'board', 'body', 'hips', 'torso', 'neck', 'head', 'bobble', 'skinned', 'skeleton']
+        .filter((k) => !m[k]).join(',') || 'all present',
+      meshes,
+      tris: Math.round(tris),
+      trajectory: [
+        +rider.position.x.toFixed(6),
+        +rider.position.y.toFixed(6),
+        +rider.position.z.toFixed(6),
+        +rider.speed.toFixed(6),
+        +rider.yaw.toFixed(6),
+      ].join('/'),
+    };
+  });
+});
+
 /* ------------------------------------------------------------------
  * Audio needs a fresh page (the run above has already ended), a real user
  * gesture to create the context, and real elapsed time — the continuous
@@ -3136,6 +3200,29 @@ const checks = [
     results.runs.every((r) => (r.forkOpen ? r.widest > r.halfWidth : r.widest === r.halfWidth)),
     results.runs.map((r) => `${r.id} ${r.halfWidth}->${r.widest} m`).join(', ')],
   /* ==================== END the three runs ========================== */
+
+  /* ==================================================================
+   * CHARACTERS. See the measurement block for why each of these is here.
+   * ================================================================ */
+  ['all three characters keep every node the animation code poses',
+    results.characters.every((c) => c.nodes === 'all present'),
+    results.characters.map((c) => `${c.id}: ${c.nodes}`).join('; ')],
+
+  ['a character is a costume and nothing else',
+    (() => {
+      const t = results.characters.map((c) => c.trajectory);
+      return t.every((x) => x === t[0]);
+    })(),
+    `40 s of identical input ends at ${results.characters[0].trajectory} for ` +
+    results.characters.map((c) => c.id).join(', ')],
+
+  ['and they are actually different to look at',
+    (() => {
+      const shapes = results.characters.map((c) => `${c.meshes}/${c.tris}`);
+      return new Set(shapes).size === shapes.length;
+    })(),
+    results.characters.map((c) => `${c.id} ${c.meshes} meshes / ${c.tris} tris`).join(', ')],
+  /* ==================== END characters ============================== */
 ];
 
 console.log(JSON.stringify(results, null, 2));

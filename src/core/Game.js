@@ -23,6 +23,7 @@ import { TouchControls } from './TouchControls.js';
 import { difficulty, applyDifficulty, loadDifficulty, presetInfo } from './Difficulty.js';
 // Which mountain, and remembering the choice across the reload a switch needs.
 import { runInfo, loadRun, saveRun, armDropIn, takeDropIn } from './RunSelect.js';
+import { loadCharacter, saveCharacter, characterById } from './CharacterSelect.js';
 import { Leaderboard } from '../services/Leaderboard.js';
 import { Profile } from '../services/Profile.js';
 import { clamp } from './mathx.js';
@@ -70,8 +71,10 @@ export class Game {
     this.difficultyName = loadDifficulty();
     applyDifficulty(this.difficultyName);
 
-    // Which mountain gets built. Before `_buildWorld`, for obvious reasons.
+    // Which mountain gets built, and who rides it. Both before `_buildWorld`,
+    // for obvious reasons.
     this.runId = loadRun();
+    this.characterId = loadCharacter();
 
     this._buildWorld();
 
@@ -100,10 +103,12 @@ export class Game {
       onHelp: () => this.toggleHelp(),
       onDifficulty: (name) => this.setDifficulty(name),
       onRun: (id) => this.setRun(id),
+      onCharacter: (id) => this.setCharacter(id),
     });
     this.hud.setMuted(this.audio.muted);
     this.hud.setDifficulty(this.difficultyName);
     this.hud.setRun(this.runId);
+    this.hud.setCharacter(this.characterId);
 
     // Who is riding, and what everyone has scored. Both are local for now and
     // both are read through interfaces that a server can sit behind later.
@@ -187,7 +192,10 @@ export class Game {
     this.skiers = new Skiers(course);
     this.scene.add(this.skiers.group);
 
-    this.rider = new Rider(course);
+    this.rider = new Rider(course, this.characterId);
+    // Same reason `_builtRunId` exists: what is *standing* is not what is
+    // *selected*, and `start` needs to know the difference.
+    this._builtCharacterId = characterById(this.characterId).id;
     this.scene.add(this.rider.model.root);
 
     // Hand the sky to the few materials that are meant to reflect it.
@@ -304,6 +312,21 @@ export class Game {
     this._refreshTitleBoard();
   }
 
+  /**
+   * Records who is riding. Like `setRun`, this cannot swap the thing already
+   * standing — `start` reloads for that — so it only remembers the choice.
+   *
+   * No leaderboard split: a character is a costume. Two players who rode the
+   * same mountain on the same tuning are comparable whatever they were wearing,
+   * and splitting the table three more ways would leave every one of them
+   * empty.
+   */
+  setCharacter(id) {
+    this.characterId = characterById(id).id;
+    saveCharacter(this.characterId);
+    this.hud.setCharacter(this.characterId);
+  }
+
   async _refreshTitleBoard() {
     // The table is the run and the tuning together — the title board has to
     // show scores from the game you are about to play, not a neighbouring one.
@@ -352,7 +375,7 @@ export class Game {
     // is how that is done — see the note in `RunSelect.js`. The press is
     // carried across it, so this reads as a slightly slower drop-in rather
     // than as a button that did nothing.
-    if (this.runId !== this._builtRunId) {
+    if (this.runId !== this._builtRunId || this.characterId !== this._builtCharacterId) {
       armDropIn();
       location.reload();
       return;

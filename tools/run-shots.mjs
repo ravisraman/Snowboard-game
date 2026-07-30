@@ -30,6 +30,17 @@ const SHOTS = [
   { run: 'classic', name: 'stars', z: 500 },
   { run: 'classic', name: 'gates', z: 1015 },
 
+  /* The three characters, cropped to the middle of the frame.
+   *
+   * A character is about a hundred pixels tall in a 1280-wide shot, which is
+   * the right size for judging whether it reads at *playing* distance and the
+   * wrong size for judging whether the ears are on straight. The crop is the
+   * same rider at the same moment, just without three thousand square pixels
+   * of snow around it. */
+  { run: 'classic', name: 'who-rider', z: 620, character: 'rider', closeUp: true },
+  { run: 'classic', name: 'who-fox', z: 620, character: 'fox', closeUp: true },
+  { run: 'classic', name: 'who-wizard', z: 620, character: 'wizard', closeUp: true },
+
   { run: 'park', name: 'stepdown-approach', z: 905 },
   { run: 'park', name: 'tunnel-mouth', z: 985 },
   { run: 'park', name: 'tunnel-inside', z: 1080 },
@@ -75,16 +86,19 @@ for (const shot of wanted) {
 
   // The run is chosen before the world is built, because building it is the
   // only time the choice is read — see the note in `RunSelect.js`.
-  await page.addInitScript((id) => {
-    try { localStorage.setItem('alpine-carve.run', id); } catch { /* ignore */ }
-  }, shot.run);
+  await page.addInitScript(({ run, character }) => {
+    try {
+      localStorage.setItem('alpine-carve.run', run);
+      if (character) localStorage.setItem('alpine-carve.character', character);
+    } catch { /* ignore */ }
+  }, { run: shot.run, character: shot.character });
 
   await page.goto(BASE, { waitUntil: 'load' });
   await page.waitForFunction(() => !!window.game, null, { timeout: 90_000 });
   await page.click('#btn-start');
   await page.waitForTimeout(400);
 
-  const state = await page.evaluate(({ z: targetZ, lane }) => {
+  const state = await page.evaluate(({ z: targetZ, lane, closeUp }) => {
     const g = window.game;
     const c = g.course;
     const fake = {
@@ -132,6 +146,29 @@ for (const shot of wanted) {
     g.update = () => {};
     g.skiers.hits = realHits;
     void realInput;
+
+    /* Walk the camera in.
+     *
+     * The chase camera frames the *run*, which is what it is for — and it puts
+     * the character at about a hundred pixels tall, which is the right size to
+     * judge "does this read at playing distance" and useless for judging
+     * whether the ears are on straight. Both questions need answering, so this
+     * moves the camera to arm's length once the scene is frozen. Nothing about
+     * the model changes; only where it is looked at from. */
+    if (closeUp) {
+      const r = g.rider;
+      // In *front* and round to one side. Behind is the view the game gives
+      // you for free and the one view where a face, a muzzle, a beard and a
+      // staff held in the leading hand are all hidden by the rider's own back.
+      const a = r.yaw + 0.85;
+      g.camera.position.set(
+        r.position.x + Math.sin(a) * 2.6,
+        r.position.y + 1.35,
+        r.position.z + Math.cos(a) * 2.6,
+      );
+      g.camera.lookAt(r.position.x, r.position.y + 0.85, r.position.z);
+      g.camera.updateMatrixWorld();
+    }
     return {
       state: g.state,
       z: Math.round(g.rider.position.z),
@@ -143,7 +180,7 @@ for (const shot of wanted) {
   // Let the renderer actually draw the frame. Under software rendering a
   // wall-clock wait can be very few frames, so this is generous on purpose.
   await page.waitForTimeout(2500);
-  await page.screenshot({ path: `${OUT}/${shot.run}-${shot.name}.png` });
+  await page.screenshot({ path: `${OUT}/${shot.run}-${shot.name}.png`, clip: shot.clip });
   console.log(
     `${shot.run}-${shot.name}`.padEnd(30),
     `z=${state.z} u=${state.u} ${state.kmh} km/h ${state.state}`,

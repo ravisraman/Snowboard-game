@@ -127,9 +127,14 @@ const GRAB_POSES = {
 const EMPTY_RAILS = [];
 
 export class Rider {
-  constructor(course) {
+  /**
+   * `character` is the *appearance* and nothing else — every character has the
+   * same mass, the same edge grip and the same pop. Defaulted so the harness
+   * and anything else building a bare rider keeps getting the original one.
+   */
+  constructor(course, character) {
     this.course = course;
-    this.model = buildRiderModel();
+    this.model = buildRiderModel(character);
 
     // Scratch objects, reused every frame to keep the update allocation-free.
     this._normal = { x: 0, y: 1, z: 0 };

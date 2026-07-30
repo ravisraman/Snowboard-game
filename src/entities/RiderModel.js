@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clamp, smoothstep } from '../core/mathx.js';
 import { riderTextures, remapUV, REGION } from './RiderTextures.js';
+import { characterById, DEFAULT_CHARACTER } from './Characters.js';
 
 /**
  * The snowboarder: model and rig.
@@ -88,6 +89,24 @@ const MAT = {
   base: new THREE.MeshStandardMaterial({ color: '#e9f1f8', roughness: 0.16, metalness: 0.2, flatShading: true }),
   edge: new THREE.MeshStandardMaterial({ color: '#c9d4de', roughness: 0.18, metalness: 0.95 }),
   binding: new THREE.MeshStandardMaterial({ color: '#39414d', roughness: 0.75 }),
+
+  /* --- Character accents ---
+   *
+   * Flat colours with no texture, for the handful of pieces whose colour is
+   * not the atlas's: a cream muzzle on an orange face, white hair on a grey
+   * hat. They cannot come from the atlas because each atlas region is one UV
+   * island — the head is a single sphere, and a two-tone face would need it
+   * split in two.
+   *
+   * Each one costs a draw call *only if the character using it exists*: `bake`
+   * merges by material, so on the rider all of these have nothing pointing at
+   * them and produce no mesh at all. */
+  foxMuzzle: new THREE.MeshStandardMaterial({ color: '#f7e6cd', roughness: 0.85 }),
+  foxDark: new THREE.MeshStandardMaterial({ color: '#2b211b', roughness: 0.7 }),
+  wizHat: new THREE.MeshStandardMaterial({ color: '#79758a', roughness: 0.95, flatShading: true }),
+  wizHair: new THREE.MeshStandardMaterial({ color: '#eef0f4', roughness: 1 }),
+  staffWood: new THREE.MeshStandardMaterial({ color: '#6b4f33', roughness: 0.85, flatShading: true }),
+  staffKnot: new THREE.MeshStandardMaterial({ color: '#8a6b45', roughness: 0.8, flatShading: true }),
 };
 
 /**
@@ -508,7 +527,8 @@ function dome(rings, { steps = 3, reach = 1 } = {}) {
  * Assembly
  * ---------------------------------------------------------------- */
 
-export function buildRiderModel() {
+export function buildRiderModel(characterId = DEFAULT_CHARACTER) {
+  const character = characterById(characterId);
   const root = new THREE.Group();
   root.name = 'rider';
 
@@ -674,7 +694,7 @@ export function buildRiderModel() {
   }
 
   /* ---- One mesh, one material, one draw call ---- */
-  const { map, normalMap, roughnessMap } = riderTextures();
+  const { map, normalMap, roughnessMap } = riderTextures(character.id);
   MAT.body.map = map;
   MAT.body.normalMap = normalMap;
   MAT.body.roughnessMap = roughnessMap;
@@ -703,20 +723,128 @@ export function buildRiderModel() {
     leg.boot = boot;
   }
 
-  // Goggles and a beanie. The beanie's bobble is its own node so it can swing.
-  mesh(remapUV(stretchUV(new THREE.SphereGeometry(0.142, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.6)), REGION.beanie),
-    MAT.body, head, 0, 0.216, 0);
-  mesh(remapUV(stretchUV(new THREE.CylinderGeometry(0.147, 0.151, 0.064, 14)), REGION.beanie),
-    MAT.body, head, 0, 0.183, 0);
-
+  /* ---- What is on the head, and who is wearing it ----
+   *
+   * Everything above this point is the same for all three characters. This is
+   * the whole of the difference, plus the palette baked into the atlas: a
+   * beanie, or ears and a snout, or a hat and a beard.
+   *
+   * `bobble` is returned either way and always exists, because `Rider.js`
+   * swings it every frame and does not ask what it is holding. On the rider it
+   * is the beanie's pom; on the wizard it is the tip of the hat, which is a
+   * better use for it than either was designed for; on the fox it is empty and
+   * swings nothing. */
   const bobble = new THREE.Group();
-  bobble.position.set(0, 0.295, 0);
   head.add(bobble);
-  mesh(remapUV(stretchUV(new THREE.SphereGeometry(0.046, 10, 8)), REGION.beanie), MAT.body, bobble, 0, 0.04, 0);
 
-  mesh(roundedBox(0.212, 0.072, 0.05, 0.024), MAT.goggleFrame, head, 0, 0.164, 0.088);
-  mesh(roundedBox(0.186, 0.052, 0.03, 0.014), MAT.goggleLens, head, 0, 0.164, 0.108);
-  mesh(new THREE.CylinderGeometry(0.136, 0.136, 0.046, 14, 1, true), MAT.goggleFrame, head, 0, 0.164, 0);
+  const goggles = () => {
+    mesh(roundedBox(0.212, 0.072, 0.05, 0.024), MAT.goggleFrame, head, 0, 0.164, 0.088);
+    mesh(roundedBox(0.186, 0.052, 0.03, 0.014), MAT.goggleLens, head, 0, 0.164, 0.108);
+    mesh(new THREE.CylinderGeometry(0.136, 0.136, 0.046, 14, 1, true), MAT.goggleFrame, head, 0, 0.164, 0);
+  };
+
+  if (character.head === 'fox') {
+    // Ears, a muzzle and a tail. The fur itself is the atlas — `REGION.beanie`
+    // and the head's own region are fox orange in this palette — so these are
+    // only the pieces whose *shape* has to change.
+    bobble.position.set(0, 0.295, 0);
+
+    const ear = (side) => {
+      const cone = new THREE.ConeGeometry(0.058, 0.135, 8);
+      cone.rotateZ(side * 0.22);
+      mesh(remapUV(stretchUV(cone), REGION.beanie), MAT.body, head, side * 0.075, 0.285, -0.005);
+      const tip = new THREE.ConeGeometry(0.03, 0.05, 8);
+      tip.rotateZ(side * 0.22);
+      mesh(tip, MAT.foxDark, head, side * 0.086, 0.337, -0.005);
+    };
+    ear(-1);
+    ear(1);
+
+    // Muzzle: cones point +Y by default and the face looks down +Z.
+    const snout = new THREE.ConeGeometry(0.066, 0.15, 10);
+    snout.rotateX(Math.PI / 2);
+    mesh(snout, MAT.foxMuzzle, head, 0, 0.128, 0.155);
+    mesh(new THREE.SphereGeometry(0.028, 8, 6), MAT.foxDark, head, 0, 0.132, 0.222);
+
+    goggles();
+
+    /* The tail hangs off the hips, so it swings with the whole body rather
+     * than with the head.
+     *
+     * A cone points +Y, and `rotateX(t)` sends that to `(0, cos t, sin t)`. At
+     * -1.16 that is up and back, which is how a fox carries it. The white tip
+     * then has to sit at the cone's *apex* — half its height along that same
+     * vector from its centre — and not somewhere chosen by eye: the first
+     * attempt put it at (0, 0.20, -0.36) and it hung in the air a clear
+     * hand's width off the end of the tail. */
+    const lift = -1.16;
+    const tailAt = { y: 0.05, z: -0.20 };
+    const tail = new THREE.ConeGeometry(0.085, 0.44, 10);
+    tail.rotateX(lift);
+    mesh(remapUV(stretchUV(tail), REGION.beanie), MAT.body, hips, 0, tailAt.y, tailAt.z);
+    mesh(new THREE.SphereGeometry(0.062, 10, 8), MAT.foxMuzzle, hips,
+      0, tailAt.y + Math.cos(lift) * 0.22, tailAt.z + Math.sin(lift) * 0.22);
+  } else if (character.head === 'wizard') {
+    // A brim, a cone, a beard, and no goggles — the beard is the silhouette
+    // and it needs the face to hang off.
+    // Narrower than a wizard hat wants to be, because at 0.30 the brim was
+    // more than twice the width of the head and threw the entire face — beard
+    // included — into its own shade from every angle above the horizon.
+    mesh(new THREE.CylinderGeometry(0.245, 0.255, 0.024, 18), MAT.wizHat, head, 0, 0.262, 0.012);
+    mesh(new THREE.ConeGeometry(0.156, 0.30, 14), MAT.wizHat, head, 0, 0.418, 0.004);
+
+    // The tip carries on where the cone stops, and swings.
+    bobble.position.set(0, 0.556, 0.004);
+    const tip = new THREE.ConeGeometry(0.062, 0.19, 12);
+    mesh(tip, MAT.wizHat, bobble, 0, 0.082, 0);
+
+    /* Beard: a cone pointing down off the chin, with a moustache across the
+     * top so the two read as one piece of hair rather than a spike.
+     *
+     * Pushed forward of the face rather than hung straight down from it. The
+     * chin is only a few centimetres above the collar, so a beard of any
+     * length that drops vertically is inside the chest and invisible — it has
+     * to lie *on* the front of the torso, which is where a real one goes. */
+    const beard = new THREE.ConeGeometry(0.10, 0.36, 12);
+    beard.rotateX(Math.PI - 0.30);
+    mesh(beard, MAT.wizHair, head, 0, 0.006, 0.128);
+    mesh(new THREE.SphereGeometry(0.072, 10, 8), MAT.wizHair, head, 0, 0.108, 0.098);
+    mesh(roundedBox(0.062, 0.02, 0.03, 0.008), MAT.wizHair, head, -0.052, 0.178, 0.112);
+    mesh(roundedBox(0.062, 0.02, 0.03, 0.008), MAT.wizHair, head, 0.052, 0.178, 0.112);
+  } else {
+    bobble.position.set(0, 0.295, 0);
+    mesh(remapUV(stretchUV(new THREE.SphereGeometry(0.142, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.6)), REGION.beanie),
+      MAT.body, head, 0, 0.216, 0);
+    mesh(remapUV(stretchUV(new THREE.CylinderGeometry(0.147, 0.151, 0.064, 14)), REGION.beanie),
+      MAT.body, head, 0, 0.183, 0);
+    mesh(remapUV(stretchUV(new THREE.SphereGeometry(0.046, 10, 8)), REGION.beanie), MAT.body, bobble, 0, 0.04, 0);
+    goggles();
+  }
+
+  /* ---- The staff ----
+   *
+   * Hung off the leading wrist, so it goes wherever the arm goes: it swings
+   * with a carve and it sweeps round through a grab. That is not a simulation
+   * of holding a staff and it does not need to be — it is a long dark diagonal
+   * attached to the rider, and at chase-camera distance a long dark diagonal
+   * that moves with the arms is exactly what reads as a wizard on a snowboard.
+   */
+  if (character.staff) {
+    /* A limb's bones run *down* it: each is offset by `-forearm` in Y from its
+     * parent, so the wrist's local +Y points back up the arm toward the elbow.
+     * A staff laid along +Y from the hand therefore runs up *inside* the
+     * forearm and out through the shoulder, which is where the first one went
+     * and why it could not be seen from any angle.
+     *
+     * So it is offset forward of the arm — clear of the limb it is held beside
+     * — and centred near the hand so it stands proud at both ends. */
+    // Sized and placed so the bottom end finishes around hip height. Longer
+    // and centred lower, it ran straight through the deck of the board — a
+    // wizard using his staff as a punt pole, which is a different character.
+    const shaft = new THREE.CylinderGeometry(0.017, 0.021, 1.0, 7);
+    mesh(shaft, MAT.staffWood, armFront.end, 0, 0.24, 0.15);
+    mesh(new THREE.IcosahedronGeometry(0.058, 0), MAT.staffKnot, armFront.end, 0, 0.74, 0.15);
+  }
 
   bake(root);
   root.traverse((o) => { if (o.isMesh) o.castShadow = true; });

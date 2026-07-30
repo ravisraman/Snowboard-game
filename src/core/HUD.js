@@ -4,6 +4,7 @@ import { presetInfo } from './Difficulty.js';
 // The run list, already turned into something renderable — the picker never
 // touches `world/Runs.js` directly.
 import { RUNS, runInfo } from './RunSelect.js';
+import { CHARACTERS, characterById } from './CharacterSelect.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and
@@ -79,6 +80,8 @@ export class HUD {
       diffBlurb: $('difficulty-blurb'),
       runPicker: $('run-picker'),
       runButtons: [],
+      charPicker: $('character-picker'),
+      charButtons: [],
       finishRun: $('finish-run'),
       crashRun: $('crash-run'),
       nameInput: $('name-input'),
@@ -97,6 +100,7 @@ export class HUD {
     this.bestScore = this._load(BEST_SCORE_KEY);
     this._buildHelp();
     this._buildRuns();
+    this._buildCharacters();
   }
 
   /**
@@ -134,6 +138,30 @@ export class HUD {
     }).join('');
 
     this.el.runButtons = [...picker.querySelectorAll('.run-card')];
+  }
+
+  /**
+   * The character cards.
+   *
+   * Smaller than the run cards on purpose: which mountain you ride changes the
+   * game, and who you ride it as does not. An emoji does the work a 3D preview
+   * would — it is instantly readable, it costs nothing to render, and it does
+   * not need the model built before the title screen can be drawn.
+   */
+  _buildCharacters() {
+    const picker = this.el.charPicker;
+    if (!picker) return;
+
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+    picker.innerHTML = CHARACTERS.map((c) => `
+        <button class="char-card" type="button" data-character="${esc(c.id)}" aria-pressed="false">
+          <span class="char-badge" aria-hidden="true">${esc(c.badge)}</span>
+          <span class="char-name">${esc(c.name)}</span>
+          <span class="char-desc">${esc(c.blurb)}</span>
+        </button>`).join('');
+
+    this.el.charButtons = [...picker.querySelectorAll('.char-card')];
   }
 
   /**
@@ -257,14 +285,18 @@ export class HUD {
     return false;
   }
 
-  onAction({ onStart, onRestart, onRescue, onMute, onHelp, onDifficulty, onRun }) {
+  onAction({ onStart, onRestart, onRescue, onMute, onHelp, onDifficulty, onRun, onCharacter }) {
     for (const btn of this.el.diffButtons) {
       btn.addEventListener('click', () => onDifficulty?.(btn.dataset.difficulty));
     }
     for (const btn of this.el.runButtons) {
       btn.addEventListener('click', () => onRun?.(btn.dataset.run));
     }
+    for (const btn of this.el.charButtons) {
+      btn.addEventListener('click', () => onCharacter?.(btn.dataset.character));
+    }
     this._pickerKeys(this.el.runButtons);
+    this._pickerKeys(this.el.charButtons);
     this._pickerKeys(this.el.diffButtons);
     this.el.start.addEventListener('click', onStart);
     this.el.retry.addEventListener('click', onRestart);
@@ -304,6 +336,17 @@ export class HUD {
     }
     if (this.el.finishRun) this.el.finishRun.textContent = info.name;
     if (this.el.crashRun) this.el.crashRun.textContent = info.name;
+  }
+
+  /** Lights the chosen character's card. No badge on the results screens: a
+   *  costume is not part of the score. */
+  setCharacter(id) {
+    const info = characterById(id);
+    for (const btn of this.el.charButtons) {
+      const on = btn.dataset.character === info.id;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
   }
 
   /** Says what just happened, so a sudden loss of speed is not a mystery. */

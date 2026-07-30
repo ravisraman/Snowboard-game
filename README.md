@@ -116,6 +116,29 @@ Two of the features are worth a note because they are not what they look like:
 run, and fails on the overlaps that matter — a jump promoted onto the fork's
 divider, say. Re-run it after changing any seed or spacing.
 
+## Characters
+
+Three of them, picked on the title screen next to the run: **the Rider** (the
+one the game has always had), **the Fox**, and **the Wizard**.
+
+A character is a costume and nothing else — same mass, same edge grip, same
+pop. That is asserted rather than asserted-to: `tools/check-mechanics.mjs`
+gives all three forty seconds of identical input and requires the position,
+speed and heading at the end to match to six decimal places. It is also why the
+leaderboard does not split by character, when it does split by run and by
+tuning.
+
+All three share one skinned mesh, one skeleton and one set of poses. What
+differs is the palette baked into the texture atlas — `entities/Characters.js`
+holds one per character — and a handful of rigid pieces hung off the head and
+hands: ears, a muzzle and a tail, or a hat, a beard and a staff. A genuinely
+different body would mean a second rig, a second atlas and a second set of
+poses; a recoloured rig with a good silhouette reads as a different character
+from the chase camera, which is the only place anyone ever sees it.
+
+Changing character reloads the page, for the same reason changing run does —
+see the note at the top of `core/CharacterSelect.js`.
+
 ## Difficulty
 
 The title screen offers **CRUISE** and **ORIGINAL**, and remembers which you

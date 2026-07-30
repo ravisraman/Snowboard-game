@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng } from '../core/mathx.js';
+import { characterById, DEFAULT_CHARACTER } from './Characters.js';
 
 /**
  * The rider's textures, painted onto a canvas at start-up.
@@ -44,22 +45,20 @@ export const REGION = {
   strap:  { x: 512, y: 768, w: 256, h: 256 },
 };
 
-/** The palette, kept here so the whole rider can be recoloured in one place. */
-const C = {
-  shell: '#f0742b',
-  shellDark: '#c9541a',
-  shellDeep: '#8f3a12',
-  trim: '#1e2a38',
-  trimLight: '#33465c',
-  pants: '#2f568f',
-  pantsDark: '#24406d',
-  skin: '#e7b189',
-  skinShade: '#cf9068',
-  beanie: '#f2b431',
-  beanieDark: '#d8921f',
-  boot: '#1b2028',
-  mitten: '#222c3a',
-};
+/**
+ * The palette in force while the atlas is being painted.
+ *
+ * Module-level and reassigned, which wants justifying. Every `paint*` function
+ * below reaches for `C` a hundred times; threading a palette argument through
+ * all of them would be a lot of noise for a value that is constant for the
+ * whole of one bake. So `riderTextures()` points `C` at the character being
+ * painted, paints, and the result is cached under that character's id.
+ *
+ * The safety of that rests on one fact: nothing here is re-entrant. A bake is
+ * synchronous from the first `inRegion` to the last, with no await and no
+ * callback into anything that could start a second one.
+ */
+let C = characterById(DEFAULT_CHARACTER).palette;
 
 /**
  * Turns a part's own 0-1 UVs into atlas coordinates.
@@ -495,7 +494,8 @@ function heightToNormal(height, strength = 2.6) {
  * Assembly
  * ---------------------------------------------------------------- */
 
-let cached = null;
+/** One baked atlas per character id. A character never changes mid-page. */
+const cache = new Map();
 
 /**
  * Paints the atlas once and hands back the three maps.
@@ -504,9 +504,17 @@ let cached = null;
  * change with the seed, and repainting a megapixel three times on every
  * restart is a visible stall.
  */
-export function riderTextures() {
-  if (cached) return cached;
+export function riderTextures(characterId = DEFAULT_CHARACTER) {
+  const character = characterById(characterId);
+  const hit = cache.get(character.id);
+  if (hit) return hit;
 
+  C = character.palette;
+
+  // The same seed for every character, deliberately: the weave, the stitching
+  // and the blotching should be the *same* garment in a different colour, not
+  // a different garment. A per-character seed made the fox's jacket a subtly
+  // different fabric from the rider's for no reason anybody could name.
   const rng = makeRng(91117);
   const colour = canvas('#000000');
   const height = canvas('#808080', true);
@@ -544,6 +552,7 @@ export function riderTextures() {
     t.needsUpdate = true;
   }
 
-  cached = { map, normalMap, roughnessMap };
-  return cached;
+  const maps = { map, normalMap, roughnessMap };
+  cache.set(character.id, maps);
+  return maps;
 }
