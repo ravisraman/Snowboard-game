@@ -28,6 +28,12 @@ export class Input {
   constructor(target = window) {
     this.down = new Set();
     this.jumpPressed = false;
+    /**
+     * Set on the frame the jump key comes *up*, which is when a charged ollie
+     * actually fires. Edge-triggered like `jumpPressed` and cleared by
+     * `endFrame` in the same place.
+     */
+    this.jumpReleased = false;
     this.restartPressed = false;
     this.rescuePressed = false;
     this.helpPressed = false;
@@ -55,7 +61,9 @@ export class Input {
 
     this._onKeyUp = (e) => {
       const action = KEYMAP[e.code];
-      if (action) this.down.delete(action);
+      if (!action) return;
+      if (action === 'jump') this.jumpReleased = true;
+      this.down.delete(action);
     };
 
     this._onBlur = () => this.down.clear();
@@ -71,6 +79,16 @@ export class Input {
     const s = keys + this.touch.steer;
     return s < -1 ? -1 : s > 1 ? 1 : s;
   }
+
+  /**
+   * Whether the jump key is still down, so the ollie can be charged.
+   *
+   * Deliberately keyboard-only. The on-screen button writes `jumpPressed`
+   * directly without ever entering `down`, so a tap on a phone reads as
+   * pressed-but-never-held and pops instantly at zero charge — which is the
+   * right behaviour for a control you cannot hold accurately anyway.
+   */
+  get jumpHeld() { return this.down.has('jump'); }
 
   get tuck() { return this.down.has('tuck') || this.touch.tuck; }
   get brake() { return this.down.has('brake') || this.touch.brake; }
@@ -93,6 +111,7 @@ export class Input {
   /** Call once per frame, after the world has read the edge-triggered flags. */
   endFrame() {
     this.jumpPressed = false;
+    this.jumpReleased = false;
     this.restartPressed = false;
     this.rescuePressed = false;
     this.helpPressed = false;
@@ -105,6 +124,7 @@ export class Input {
     this.touch.brake = false;
     this.touch.press = false;
     this.jumpPressed = false;
+    this.jumpReleased = false;
     this.restartPressed = false;
     this.rescuePressed = false;
     this.helpPressed = false;

@@ -31,6 +31,9 @@ export class HUD {
       spin: $('spin-value'),
       speed: $('speed-value'),
       speedFill: $('speed-fill'),
+      boostBar: $('boost-bar'),
+      boostFill: $('boost-fill'),
+      boostHint: $('boost-hint'),
       timer: $('timer-value'),
       progress: $('progress-fill'),
       trackerTicks: $('tracker-ticks'),
@@ -42,8 +45,11 @@ export class HUD {
       powder: $('powder-tag'),
       bump: $('bump-tag'),
       starCount: $('star-count'),
+      wipeouts: $('wipeouts'),
       callout: $('big-callout'),
       finishStars: $('finish-stars'),
+      finishWipeouts: $('finish-wipeouts'),
+      crashWipeouts: $('crash-wipeouts'),
       crashStars: $('crash-stars'),
       overlay: $('overlay'),
       title: $('screen-title'),
@@ -95,6 +101,7 @@ export class HUD {
     this._last = {
       speed: -1, timer: '', air: false, powder: false, progress: -1,
       score: -1, combo: -1, comboPct: -1, spin: -1, metres: -1, stars: -1,
+      boost: -1, boostState: '', wipeouts: -1,
     };
     this.best = this._load(BEST_TIME_KEY);
     this.bestScore = this._load(BEST_SCORE_KEY);
@@ -349,6 +356,29 @@ export class HUD {
     }
   }
 
+  /**
+   * How many chances are left, as boards rather than as a number.
+   *
+   * Three little icons a child can count beats "3" for the same reason the run
+   * cards have dots as well as words. Spent ones stay in place and go dim, so
+   * the row never changes width and the cost of a wipeout is visible as a gap
+   * rather than as a number that got smaller when they were not looking.
+   */
+  /** Written into both results screens by `Game` before either is shown. */
+  setWipeoutsUsed(n) {
+    if (this.el.finishWipeouts) this.el.finishWipeouts.textContent = n;
+    if (this.el.crashWipeouts) this.el.crashWipeouts.textContent = n;
+  }
+
+  setWipeouts(left, total) {
+    const el = this.el.wipeouts;
+    if (!el || left === this._last.wipeouts) return;
+    this._last.wipeouts = left;
+    el.innerHTML = Array.from({ length: total }, (_, i) =>
+      `<i class="${i < left ? 'on' : ''}" aria-hidden="true"></i>`).join('');
+    el.classList.toggle('last', left === 1);
+  }
+
   /** Says what just happened, so a sudden loss of speed is not a mystery. */
   flashBump(text = 'CLIPPED A SKIER') {
     const el = this.el.bump;
@@ -432,6 +462,25 @@ export class HUD {
       this._last.speed = kmh;
       this.el.speed.textContent = kmh;
       this.el.speedFill.style.width = `${clamp((rider.speed / 36) * 100, 0, 100)}%`;
+    }
+
+    /* The boost meter.
+     *
+     * Hidden entirely at zero rather than shown empty. A player who has not
+     * landed a trick yet has no idea what it is, and an empty bar under the
+     * speed bar is a thing to worry about; the first time it appears is the
+     * first time it means something. The hint appears with it, once. */
+    const boostPct = Math.round(clamp(rider.boost ?? 0, 0, 1) * 100);
+    if (boostPct !== this._last.boost) {
+      this._last.boost = boostPct;
+      this.el.boostFill.style.width = `${boostPct}%`;
+      this.el.boostBar.classList.toggle('has', boostPct > 0);
+    }
+    const boostState = rider.boosting ? 'burning' : rider.armedBoost ? 'ready' : '';
+    if (boostState !== this._last.boostState) {
+      this._last.boostState = boostState;
+      this.el.boostBar.classList.toggle('burning', boostState === 'burning');
+      this.el.boostHint.classList.toggle('show', boostState === 'ready');
     }
 
     const t = formatTime(elapsed);

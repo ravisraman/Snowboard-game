@@ -39,6 +39,25 @@ import { clamp } from './mathx.js';
 const OUT_OF_BOUNDS = 148;
 const CRASH_SLOWMO = 1.15;
 
+/**
+ * How many times you can go down before the run is actually over.
+ *
+ * A crash used to end it outright: one tree, ninety seconds gone, back to the
+ * title screen. For an adult that is a fair price. For a seven-year-old it is
+ * the game saying stop playing, and it was by a distance the most likely
+ * reason for a session to end.
+ *
+ * So a wipeout is a *resource*. It still hurts — the multiplier is gone, the
+ * boost with it, and you get up slowly while the clock runs — but the run
+ * continues, and the score you had banked is still yours. Only running out
+ * ends things, which turns the last one into a real moment rather than a
+ * surprise.
+ */
+const WIPEOUTS = 3;
+
+/** How fast you are riding again after getting up. Slow enough to sting. */
+const RECOVER_SPEED = 9;
+
 /** Below this speed, for this long, the rider is offered a way out. */
 const STUCK_SPEED = 2.2;
 const STUCK_SECONDS = 2.5;
@@ -46,6 +65,18 @@ const STUCK_SECONDS = 2.5;
 /** How close to a tree, and how fast, counts as threading it. */
 const NEAR_MISS_MARGIN = 1.6;
 const NEAR_MISS_SPEED = 12;
+
+/**
+ * How much of the boost meter a trick worth `points` is worth.
+ *
+ * Square-rooted rather than linear, and capped. A trick's score already runs
+ * away with itself by design — the multiplier is exponential and a big
+ * late-run combo can pay thousands — and a linear meter would mean one huge
+ * trick filling it from empty while ten honest ones did nothing much. The
+ * curve makes a modest trick feel worth doing and a monster trick feel
+ * generous without being the only thing that matters.
+ */
+const boostFor = (points) => Math.min(0.34, Math.sqrt(Math.max(0, points)) / 90);
 
 export class Game {
   constructor(renderer, quality = {}) {
@@ -242,6 +273,9 @@ export class Game {
     this.stuckTimer = 0;
     this.isStuck = false;
     this._finishShown = false;
+    this.wipeoutsLeft = WIPEOUTS;
+    this.wipeoutsUsed = 0;
+    this.hud.setWipeouts(this.wipeoutsLeft, WIPEOUTS);
     this.hud.setStuck(false);
     this.hud.resetTicker();
     this.hud.update(this.rider, 0, 0, this.score);
@@ -441,6 +475,42 @@ export class Game {
     this.hud.flashBump('CLIPPED A TREE');
   }
 
+  /**
+   * Spend a wipeout and carry on.
+   *
+   * Called at the end of the slow-motion beat, so the tumble still reads as a
+   * tumble — the player sees themselves go down, and only then get up. Putting
+   * the recovery on the frame of the impact instead made a crash feel like a
+   * stutter rather than a mistake.
+   *
+   * The rider comes back on the centre line, which is also what quietly fixes
+   * an out-of-bounds crash: whatever they rode off the edge of, they are back
+   * on the piste now.
+   */
+  _getUp() {
+    const r = this.rider;
+    const z = clamp(r.position.z, 0, this.course.finishZ - 5);
+    this.wipeoutsLeft -= 1;
+    this.wipeoutsUsed += 1;
+    r.recover(this.course.centerX(z), z, this.course.trackHeading(z), RECOVER_SPEED);
+    // The meter goes with the multiplier. Boost is the reward for a run that
+    // is going well, and this one just stopped going well.
+    r.boost = 0;
+    this.tracks.lift();
+    this.chase.reset(r);
+    this.stuckTimer = 0;
+    this.isStuck = false;
+    this.hud.setStuck(false);
+    this.hud.setWipeouts(this.wipeoutsLeft, WIPEOUTS);
+    this.hud.flashCallout(this.wipeoutsLeft > 0
+      ? `WIPEOUT — ${this.wipeoutsLeft} LEFT`
+      : 'LAST CHANCE');
+    this.spray.burst(r.position, 50, 4, 0.6);
+    this.touch.setVisible(true);
+    this.state = 'riding';
+    this.crashTimer = 0;
+  }
+
   _crash(reason) {
     if (this.state !== 'riding') return;
     this.touch.setVisible(false);
@@ -513,9 +583,13 @@ export class Game {
       this.crashTimer += dt;
       scale = 0.36;
       if (this.crashTimer > CRASH_SLOWMO) {
-        this.state = 'crashed';
-        this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z, this.score);
-        this._fileRun({ finished: false, elapsed: this.elapsed });
+        if (this.wipeoutsLeft > 0) this._getUp();
+        else {
+          this.state = 'crashed';
+          this.hud.setWipeoutsUsed(this.wipeoutsUsed);
+          this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z, this.score);
+          this._fileRun({ finished: false, elapsed: this.elapsed });
+        }
       }
     } else if (this.state === 'finished') {
       this.finishTimer += dt;
@@ -523,6 +597,7 @@ export class Game {
       // Let the rider coast past the banner for a beat before the results land.
       if (this.finishTimer > 1.6 && !this._finishShown) {
         this._finishShown = true;
+        this.hud.setWipeoutsUsed(this.wipeoutsUsed);
         this.hud.showFinish(this.rider, this.finishElapsed, this.score);
         this._fileRun({ finished: true, elapsed: this.finishElapsed });
         this.audio.cheer();
@@ -544,6 +619,10 @@ export class Game {
       this.score.update(sdt, this.rider);
       if (this.rider.trickLanded) {
         const award = this.score.onTrickLanded(this.rider.trickLanded);
+        // Only a clean landing pays boost, for the same reason only a clean
+        // landing banks the multiplier: the meter is the reward for finishing
+        // a trick, and a trick you scrape away from is not finished.
+        if (award && this.rider.trickLanded.clean) this.rider.addBoost(boostFor(award.points));
         if (award && this.rider.trickLanded.clean) {
           const text = this._trickCallout(this.rider.trickLanded, award.points);
           if (text) {
@@ -557,6 +636,7 @@ export class Game {
       if (this.rider.grindPopped) {
         const award = this.score.onGrindPopped(this.rider.grindPopped.seconds);
         if (award) {
+          this.rider.addBoost(boostFor(award.points));
           this.audio.trick(this.score.combo);
           this.chase.kick(0.7);
           if (award.points > 90) {
@@ -799,6 +879,10 @@ export class Game {
       s.collected = true;
       this.collectibles.collectStar(s.id);
       this.score.onStar();
+      // A little, so a rider who only collects still sees the meter move and
+      // finds out what it does. Not enough to make collecting the fast way
+      // down — that has to stay the reward for landing things.
+      this.rider.addBoost(0.04);
       this.audio.trick(1);
       this.spray.burst(r.position, 10, 2, 0);
     }

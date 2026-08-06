@@ -168,6 +168,91 @@ kbd {
   overflow: hidden;
 }
 
+/* Chances left, as little boards rather than as a number. Three shapes a child
+   can count, for the same reason the run cards carry dots as well as words.
+   Spent ones stay in place and go dim, so the row never changes width and the
+   cost reads as a gap rather than as a number that quietly got smaller. */
+.wipeouts {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.wipeouts i {
+  width: 15px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.wipeouts i.on {
+  background: var(--frost);
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+}
+
+/* One left. Orange is what the rest of the game means by "this matters". */
+.wipeouts.last i.on {
+  background: var(--orange);
+  box-shadow: 0 0 10px rgba(255, 122, 52, 0.75);
+}
+
+/* The boost meter, directly under the speed bar because that is what it buys.
+   Collapsed to nothing until the first trick lands — an empty bar a new player
+   cannot explain is a worry, and the first time this appears is the first time
+   it means something. */
+.boost-bar {
+  width: 100%;
+  height: 0;
+  margin-top: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+  opacity: 0;
+  transition: height 0.25s ease, margin-top 0.25s ease, opacity 0.25s ease;
+}
+
+.boost-bar.has {
+  height: 5px;
+  margin-top: 4px;
+  opacity: 1;
+}
+
+#boost-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #7fe7ff, #2f9bff);
+  transition: width 0.12s linear;
+}
+
+/* Burning it: the bar goes hot and pulses, so spending is unmistakable even
+   with your eyes on the piste. */
+.boost-bar.burning { box-shadow: 0 0 12px rgba(120, 210, 255, 0.85); }
+.boost-bar.burning #boost-fill {
+  background: linear-gradient(90deg, #fff, #7fe7ff);
+  animation: boost-pulse 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes boost-pulse { from { filter: brightness(1); } to { filter: brightness(1.7); } }
+
+.boost-hint {
+  margin-top: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #9fe4ff;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.boost-hint.show { opacity: 0.85; }
+
+@media (prefers-reduced-motion: reduce) {
+  .boost-bar.burning #boost-fill { animation: none; }
+}
+
 #speed-fill {
   height: 100%;
   width: 0%;

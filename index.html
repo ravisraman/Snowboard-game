@@ -26,9 +26,14 @@
         <div id="star-counter" class="star-counter">
           <span class="star-icon" aria-hidden="true">★</span><span id="star-count">0</span>
         </div>
+        <!-- How many times you can still go down. Written by the HUD. -->
+        <div id="wipeouts" class="wipeouts" aria-label="Chances left"></div>
         <div class="hud-speed">
           <span id="speed-value">0</span><span class="hud-unit">km/h</span>
           <div class="speed-bar"><div id="speed-fill"></div></div>
+          <!-- Directly under the speed bar, because that is what it buys. -->
+          <div id="boost-bar" class="boost-bar"><div id="boost-fill"></div></div>
+          <div id="boost-hint" class="boost-hint">TUCK TO BURN IT</div>
         </div>
       </div>
       <div class="hud-timer">
@@ -177,6 +182,7 @@
           <div><dt>Distance</dt><dd id="crash-dist">0 m</dd></div>
           <div><dt>Top speed</dt><dd id="crash-top">0 km/h</dd></div>
           <div><dt>Stars</dt><dd id="crash-stars">0</dd></div>
+          <div><dt>Wipeouts</dt><dd id="crash-wipeouts">0</dd></div>
         </dl>
         <ol id="crash-log" class="trick-log"></ol>
         <div class="board-wrap">
@@ -200,6 +206,7 @@
           <div><dt>Best score</dt><dd id="finish-best-score">—</dd></div>
           <div><dt>Tricks</dt><dd id="finish-tricks">0</dd></div>
           <div><dt>Stars</dt><dd id="finish-stars">0</dd></div>
+          <div><dt>Wipeouts</dt><dd id="finish-wipeouts">0</dd></div>
           <div><dt>Time</dt><dd id="finish-time">0:00.00</dd></div>
           <div><dt>Best time</dt><dd id="finish-best">—</dd></div>
           <div><dt>Top speed</dt><dd id="finish-top">0 km/h</dd></div>

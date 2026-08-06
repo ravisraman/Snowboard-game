@@ -51,6 +51,8 @@ const TUNING = {
 
   popPhase: 0.72,         // how far up the ramp an ollie has to be to count
   popBoost: 0.55,         // extra ollie, as a fraction of the normal one
+  ollieChargeTime: 0.42,  // seconds of holding to reach a full load
+  ollieChargeBoost: 0.34, // extra ollie at full charge, as a fraction
 
   pressMinSpeed: 5,       // too slow to butter — the board just sits down
   butterRate: 2.9,        // rad/s the board swings round while pressed
@@ -75,6 +77,23 @@ const TUNING = {
   // unmistakably a turn, and pointed the way the hill falls.
   bankDrift: 0.9,
   bankEdgeHold: 0.85,     // fraction of the drift a fully committed edge resists
+
+  /* --- Boost -------------------------------------------------------------
+   * Landing tricks fills a meter; tucking spends it for speed above the
+   * ordinary ceiling. See `_updateBoost` for why it is spent through the tuck
+   * key rather than a key of its own.
+   */
+  /*
+   * A *multiple* of `maxSpeed`, not an absolute speed. `Difficulty.js`
+   * overwrites `maxSpeed` — cruise tops out at 24 m/s against original's 36 —
+   * so a fixed boost ceiling of 43 m/s meant the gentle tuning got a 66 per
+   * cent speed increase while the fast one got 20. The beginner mode was the
+   * one being launched down the hill.
+   */
+  boostMaxScale: 1.2,     // ceiling, as a multiple of the tuning's own top speed
+  boostThrust: 7.0,       // m/s^2 on top of the tuck's own
+  boostDrain: 0.45,       // meter per second while it is actually pushing
+  boostArmFraction: 0.9,  // of `maxSpeed`: below this, tucking spends nothing
 
   ollie: 5.6,
   leaveSpeed: 1.2,        // m/s of separation before the board is truly airborne
@@ -143,6 +162,53 @@ export class Rider {
     this.reset();
   }
 
+  /**
+   * The boost meter: what tricks are *for*.
+   *
+   * Before this existed, a rider who never pressed a trick button reached the
+   * bottom at exactly the same speed as one who landed everything. Tricks paid
+   * in points, and points are a number on a screen — nothing about the ride
+   * itself changed. So landing a trick now fills a meter, and the meter buys
+   * speed above a ceiling that cannot be reached any other way.
+   *
+   * ---------------------------------------------------------------------
+   * Why it is spent through the tuck key and not a key of its own
+   * ---------------------------------------------------------------------
+   * A dedicated boost button is the obvious design and it is wrong here. It is
+   * one more thing to know about before the game is fun, on a keyboard that
+   * already has eight, for a player who may be seven. Tuck is *already* the
+   * "go faster" control and is the first thing anybody finds.
+   *
+   * The problem with simply draining on tuck is that it removes the decision —
+   * you tuck constantly, so it would empty the moment it filled. Hence the arm
+   * threshold: the meter is only spent while the tuck is actually pushing past
+   * the ordinary top speed. Tucking out of a slow corner costs nothing, because
+   * there the tuck's own thrust is doing the work and the boost would be paying
+   * for speed you were getting for free. It burns exactly when it is buying
+   * something, which means the player never has to think about it at all and
+   * the meter still lasts long enough to matter.
+   */
+  _updateBoost(dt) {
+    // `armedBoost` is what the HUD prompts on: there is boost in the meter and
+    // the rider is going fast enough for a tuck to spend it.
+    this.armedBoost = this.boost > 0 && this.speed > TUNING.maxSpeed * TUNING.boostArmFraction;
+    this.boosting = this.tucking && this.armedBoost && !this.crashed;
+
+    if (this.boosting) {
+      this.boost = Math.max(0, this.boost - TUNING.boostDrain * dt);
+    }
+
+    // The cap eases rather than steps, or letting go of the tuck at 155 km/h
+    // would clamp the speed down in a single frame and read as hitting a wall.
+    const target = TUNING.maxSpeed * (this.boosting ? TUNING.boostMaxScale : 1);
+    this.speedCap = damp(this.speedCap, target, this.boosting ? 8 : 1.6, dt);
+  }
+
+  /** Called when a trick banks. `amount` is a fraction of a full meter. */
+  addBoost(amount) {
+    this.boost = clamp(this.boost + amount, 0, 1);
+  }
+
   reset() {
     const c = this.course;
     const z = 24;
@@ -208,6 +274,16 @@ export class Rider {
     this._modelPitch = 0;
     this._modelRoll = 0;
     this._crouch = 0;
+    /** 0-1, how loaded the ollie is. Drives the pop and the crouch alike. */
+    this.ollieCharge = 0;
+    /** What it was at the moment of the last launch — read by the score. */
+    this.launchCharge = 0;
+
+    /** 0-1. Filled by landing tricks, spent by tucking. See `_updateBoost`. */
+    this.boost = 0;
+    this.boosting = false;
+    this.armedBoost = false;
+    this.speedCap = TUNING.maxSpeed;
     this._weight = 0;
     this._lastSpeed = this.speed;
 
@@ -281,6 +357,7 @@ export class Rider {
 
     this.powder = 1 - c.groomAt(this.position.x, this.position.z);
     this.tucking = input.tuck && this.grounded;
+    this._updateBoost(dt);
     this.braking = input.brake && this.grounded;
 
     // The surface under the board, sampled once and used twice: the lateral
@@ -430,6 +507,7 @@ export class Rider {
         drag *= TUNING.dragTuck;
         accel += TUNING.tuckThrust;
       }
+      if (this.boosting) accel += TUNING.boostThrust;
       if (this.braking) {
         drag += TUNING.dragBrake;
         accel -= TUNING.brakeScrub;
@@ -447,7 +525,7 @@ export class Rider {
       accel -= TUNING.dragBase * 0.35 * this.speed * this.speed;
     }
 
-    this.speed = clamp(this.speed + accel * dt, 0, TUNING.maxSpeed);
+    this.speed = clamp(this.speed + accel * dt, 0, this.speedCap);
     this.topSpeed = Math.max(this.topSpeed, this.speed);
 
     /* ---- 4. Move ---------------------------------------------------- */
@@ -462,23 +540,56 @@ export class Rider {
     this.trickLanded = null;
     this.trickFailed = false;
 
-    if (input.jumpPressed && this.grounded) {
-      if (this.speed < TUNING.skateSpeed) {
+    /* ---- The ollie, charged ----
+     *
+     * The most-repeated action in the game used to be one binary keypress:
+     * every ollie was the same height, and the only skill in it was *where* on
+     * the ramp you pressed. Holding the key now compresses the rider — visibly,
+     * through the same crouch the tuck and the landing use — and releasing
+     * fires a pop scaled by how long it was loaded.
+     *
+     * A tap is worth exactly what it was worth before: the charge multiplier
+     * starts at 1 and climbs, so nothing anybody had already learned about the
+     * timing got quietly invalidated. What is new is the ceiling.
+     *
+     * Skating is still on the *press*, not the release. It is the thing you do
+     * when you are stopped and frustrated, and making that wait for a release
+     * would be answering a plea for help with a lecture about timing.
+     */
+    if (this.grounded && this.speed < TUNING.skateSpeed) {
+      if (input.jumpPressed) {
         // Too slow to ollie usefully, so the same button skates instead: a
         // shove down the fall line to get moving again.
         this.speed = Math.min(TUNING.maxSpeed, this.speed + TUNING.skatePush);
         this.skated = 1;
-      } else {
+      }
+      this.ollieCharge = 0;
+    } else if (this.grounded) {
+      // Charging while held. `jumpHeld` is keyboard-only by design, so a phone
+      // tap arrives as pressed-but-never-held and takes the zero-charge branch
+      // below on the very same frame.
+      if (input.jumpHeld) {
+        this.ollieCharge = Math.min(1, this.ollieCharge + dt / TUNING.ollieChargeTime);
+      }
+
+      const releasing = input.jumpReleased || (input.jumpPressed && !input.jumpHeld);
+      if (releasing) {
         // Popping right at the lip is what a rider actually times, and it is
         // worth real height. Anywhere else on the ramp is an ordinary ollie.
         const phase = c.kickerPhase(this.position.x, this.position.z);
         const popped = phase > TUNING.popPhase;
+        const charged = 1 + TUNING.ollieChargeBoost * this.ollieCharge;
         this.grounded = false;
-        this.vy = Math.max(this.vy, 0) + TUNING.ollie * (popped ? 1 + TUNING.popBoost : 1);
+        this.vy = Math.max(this.vy, 0) + TUNING.ollie * charged * (popped ? 1 + TUNING.popBoost : 1);
         this.justLaunched = true;
         this.popped = popped ? 1 : 0;
+        this.launchCharge = this.ollieCharge;
+        this.ollieCharge = 0;
         this._beginAir(popped);
       }
+    } else {
+      // Airborne: nothing to load against.
+      this.ollieCharge = 0;
     }
 
     /* ---- 5. Vertical: one rule for riding, launching and landing ------
@@ -821,6 +932,50 @@ export class Rider {
     return true;
   }
 
+  /**
+   * Get up and keep going, on the piste, pointed down the hill.
+   *
+   * The counterpart to `crash`. Everything a tumble put into a strange state —
+   * the crashed flag, the spin the body is carrying, the edge, the board's
+   * heading, whatever grind or butter was in progress — has to be put back, or
+   * the recovered rider inherits half a wipeout and behaves like it. The one
+   * thing deliberately *not* restored is speed: getting up slowly is what a
+   * wipeout costs.
+   */
+  recover(x, z, yaw, speed) {
+    this.crashed = false;
+    this.crashReason = '';
+    this.position.set(x, 0, z);
+    this.yaw = yaw;
+    this.boardYaw = yaw;
+    this.speed = speed;
+    this.vy = 0;
+    this.lean = 0;
+    this.leanVel = 0;
+    this.steer = 0;
+    this.spinFrom = yaw;
+    this.spinDegrees = 0;
+    this.spinPeak = 0;
+    this.spinArmed = false;
+    this.grabbing = false;
+    this.grabType = null;
+    this.grabTime = 0;
+    this.airTime = 0;
+    this.stumbleTime = 0;
+    this.pressing = false;
+    this.switchStance = false;
+    this.grinding = false;
+    this.grindRail = null;
+    this.ollieCharge = 0;
+    this._tumble.set(0, 0, 0);
+    // The tumble is integrated straight into `model.tilt`'s rotation, so
+    // zeroing the spin rate is not enough — the angle it has already reached
+    // stays exactly where it was and the recovered rider rides away lying on
+    // their side.
+    this.model.tilt.rotation.set(0, 0, 0);
+    this.settle();
+  }
+
   crash(reason = 'You caught an edge.') {
     if (this.crashed) return;
     this.crashed = true;
@@ -901,6 +1056,10 @@ export class Rider {
     // Buttering, the weight is deliberately dumped over one end: knees bent
     // low, arms out. Standing up straight through a press reads as a glitch.
     crouch += this.pressAmount * 0.2;
+    // Loading an ollie. The largest single contribution to the crouch on
+    // purpose: it is the tell that says the button is doing something, and a
+    // charge you cannot see is a charge nobody will use.
+    crouch += this.ollieCharge * 0.34;
     if (!this.grounded) {
       // Extend off the lip, then tuck up as the rotation builds.
       const spinTuck = clamp(this.spinDegrees / 360, 0, 1) * 0.16;
