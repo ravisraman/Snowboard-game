@@ -64,6 +64,11 @@ const TIERS = {
     aoIntensity: 3.4,
     aoRadius: 1.9,
     aoHalfRes: false,
+    /*
+     * High cirrus in the sky shader. Ten octaves of value noise per pixel over
+     * the upper half of the frame, which a desktop GPU does not notice.
+     */
+    cirrus: 0.8,
     // Resort furniture.
     chairlift: true,
     rocks: true,
@@ -116,6 +121,13 @@ const TIERS = {
      * occlusion on the rider and between moving things.
      */
     ao: false,
+    /*
+     * No cirrus either, and for the same reason as the occlusion pass: it is a
+     * per-pixel noise loop over most of the frame. The three-stop gradient, the
+     * sun and the dither all stay — those are a handful of instructions and
+     * they are most of what the sky is.
+     */
+    cirrus: false,
     // The lift stays — it is most of what says "resort" — but the far-field
     // rocks thin out, since they are the detail least likely to be looked at.
     chairlift: true,
@@ -144,6 +156,7 @@ export function qualityFor(tier) {
   if (typeof window !== 'undefined') {
     const p = new URLSearchParams(window.location.search);
     if (p.has('ao')) q.ao = p.get('ao') !== '0';
+    if (p.has('cirrus')) q.cirrus = p.get('cirrus') === '0' ? false : Number(p.get('cirrus'));
     if (p.has('aoIntensity')) q.aoIntensity = Number(p.get('aoIntensity'));
     if (p.has('aoRadius')) q.aoRadius = Number(p.get('aoRadius'));
   }

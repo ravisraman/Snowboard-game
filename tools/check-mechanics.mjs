@@ -1868,6 +1868,90 @@ results.fun = await page.evaluate(async () => {
  *      the leaderboard does not split by character — so this is what makes
  *      that table honest.
  * ================================================================ */
+/* ==================================================================
+ * THE BACKDROP.
+ *
+ * The panorama is four nested ranges wrapped round the horizon, and what makes
+ * them read as four *distances* rather than four rings of geometry is entirely
+ * in their vertex colours: aerial perspective, computed per facet from how far
+ * away it is and how deep in the valley air it sits.
+ *
+ * That is a thing with no gameplay consequence at all, which is exactly why it
+ * needs a check — nothing else in this file would notice it break, and the way
+ * it breaks is not a crash. It is the ranges quietly going back to being four
+ * flat tones, which is what they were before and what looked like stage flats.
+ *
+ * So this reads the built geometry and asks the two questions the effect is:
+ * does a facet get paler the further away it is, and does it get paler the
+ * lower down it is. Both are measured across the real ranges only — the
+ * foothills are a deliberate exception, being close but low, and sitting in
+ * more murk than the far peaks is the correct thing for them to do.
+ * ================================================================ */
+results.backdrop = await page.evaluate(async () => {
+  const { buildMountains, buildSky } = await import('/src/world/Environment.js');
+
+  const group = buildMountains(909, { panoramaDetail: 1 });
+  const mesh = group.children[0];
+  const pos = mesh.geometry.getAttribute('position');
+  const col = mesh.geometry.getAttribute('color');
+
+  // Luminance against distance, in buckets a kilometre wide. Only facets above
+  // 900 m of height, so this measures the peaks rather than the valley murk
+  // they all share.
+  const buckets = new Map();
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const d = Math.hypot(pos.getX(i), pos.getZ(i));
+    const lum = 0.2126 * col.getX(i) + 0.7152 * col.getY(i) + 0.0722 * col.getZ(i);
+    if (lum < lo) lo = lum;
+    if (lum > hi) hi = lum;
+    if (y < 900) continue;
+    const k = Math.floor(d / 1000);
+    const b = buckets.get(k) ?? { sum: 0, n: 0 };
+    b.sum += lum;
+    b.n++;
+    buckets.set(k, b);
+  }
+  const byDistance = [...buckets.entries()]
+    .filter(([, b]) => b.n > 200)
+    .sort((a, b) => a[0] - b[0])
+    .map(([k, b]) => ({ km: k, lum: +(b.sum / b.n).toFixed(4), n: b.n }));
+
+  // And luminance against height, within one range, to catch the murk term
+  // going missing while the distance term survives.
+  let footSum = 0; let footN = 0; let capSum = 0; let capN = 0;
+  for (let i = 0; i < pos.count; i++) {
+    const d = Math.hypot(pos.getX(i), pos.getZ(i));
+    if (d < 2200 || d > 3900) continue;          // the second range only
+    const y = pos.getY(i);
+    const lum = 0.2126 * col.getX(i) + 0.7152 * col.getY(i) + 0.0722 * col.getZ(i);
+    if (y < 200) { footSum += lum; footN++; }
+    else if (y > 900) { capSum += lum; capN++; }
+  }
+
+  const sky = buildSky({ cirrus: 0.8 });
+  const off = buildSky({ cirrus: false });
+
+  return {
+    byDistance,
+    lowest: +lo.toFixed(4),
+    highest: +hi.toFixed(4),
+    feet: +(footSum / Math.max(footN, 1)).toFixed(4),
+    caps: +(capSum / Math.max(capN, 1)).toFixed(4),
+    triangles: pos.count / 3,
+    skyUniforms: ['uZenith', 'uMid', 'uHorizon', 'uSunColor', 'uSunDir', 'uTime', 'uCirrus']
+      .every((k) => sky.material.uniforms[k] !== undefined),
+    cirrusOn: sky.material.uniforms.uCirrus.value,
+    cirrusOff: off.material.uniforms.uCirrus.value,
+    // Nothing in the backdrop may be lit — the sun, the snowline and the
+    // atmosphere are all already in the vertex colours, and a light landing on
+    // it would double every one of them.
+    unlit: mesh.material.type === 'MeshBasicMaterial' && mesh.material.vertexColors === true,
+  };
+});
+
 results.characters = await page.evaluate(async () => {
   const { CHARACTERS } = await import('/src/entities/Characters.js');
   const { Course } = await import('/src/world/Course.js');
@@ -3407,6 +3491,31 @@ const checks = [
   /* ==================================================================
    * CHARACTERS. See the measurement block for why each of these is here.
    * ================================================================ */
+  /* ================= backdrop ====================================== */
+  ['the further a peak is, the more air is in front of it',
+    (() => {
+      const d = results.backdrop.byDistance;
+      return d.length >= 3 && d.every((b, i) => i === 0 || b.lum > d[i - 1].lum);
+    })(),
+    results.backdrop.byDistance.map((b) => `${b.km}-${b.km + 1}km ${b.lum}`).join(', ')],
+
+  ['and a peak\'s feet are hazier than its summit',
+    results.backdrop.feet > results.backdrop.caps + 0.02,
+    `second range: feet ${results.backdrop.feet} vs caps ${results.backdrop.caps}`],
+
+  // If this collapses the panorama has gone flat, which is the failure the
+  // whole block exists for and the one that does not throw.
+  ['the panorama still has tone in it, not just silhouette',
+    results.backdrop.highest - results.backdrop.lowest > 0.25,
+    `luminance ${results.backdrop.lowest} .. ${results.backdrop.highest} ` +
+    `over ${results.backdrop.triangles} triangles`],
+
+  ['the backdrop is unlit, and the sky carries every uniform it declares',
+    results.backdrop.unlit && results.backdrop.skyUniforms &&
+    results.backdrop.cirrusOn > 0 && results.backdrop.cirrusOff === 0,
+    `vertex-coloured basic material; cirrus ${results.backdrop.cirrusOn} on the desktop tier, ` +
+    `${results.backdrop.cirrusOff} where the tier switches it off`],
+
   ['all three characters keep every node the animation code poses',
     results.characters.every((c) => c.nodes === 'all present'),
     results.characters.map((c) => `${c.id}: ${c.nodes}`).join('; ')],

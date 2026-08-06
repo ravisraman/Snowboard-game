@@ -173,7 +173,8 @@ export class Game {
 
     // Backdrop rides with the camera on X/Z so the peaks stay distant.
     this.backdrop = new THREE.Group();
-    this.backdrop.add(buildSky());
+    this.sky = buildSky(this.quality);
+    this.backdrop.add(this.sky);
     this.backdrop.add(buildMountains(909, this.quality));
     if (this.quality.clouds !== false) this.backdrop.add(buildClouds());
     this.scene.add(this.backdrop);
@@ -777,6 +778,11 @@ export class Game {
 
   _updateBackdrop() {
     this.backdrop.position.copy(this.camera.position);
+    // The cirrus drifts. It is the only thing in the upper half of the frame
+    // that moves, and a sky that is perfectly still is one of those details
+    // nobody names and everybody notices.
+    const u = this.sky.material.uniforms;
+    if (u?.uTime) u.uTime.value = this.elapsed;
   }
 
   /* ---------------------------------------------------------------- */
