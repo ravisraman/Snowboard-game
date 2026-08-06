@@ -60,6 +60,18 @@ const SHOTS = [
   { run: 'backcountry', name: 'moguls-entry', z: 960 },
   { run: 'backcountry', name: 'moguls-mid', z: 1220 },
   { run: 'backcountry', name: 'gap-approach', z: 2130 },
+
+  /*
+   * Massif has no built features to photograph, so these are sited at the four
+   * places the *survey* does something: the 0.31 opening pitch, the long 0.11
+   * shelf its bump field sits on, and the two steep rolls in the last kilometre.
+   * If the elevation tables ever stop reaching the terrain, these are the
+   * pictures that show it — the run would still build, and would look flat.
+   */
+  { run: 'massif', name: 'top-pitch', z: 90 },
+  { run: 'massif', name: 'shelf', z: 1000 },
+  { run: 'massif', name: 'moguls', z: 1400 },
+  { run: 'massif', name: 'late-roll', z: 2180 },
 ];
 
 const launchOptions = { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] };

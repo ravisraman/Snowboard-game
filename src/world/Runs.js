@@ -32,6 +32,8 @@
  *   `grade` is a dimensionless slope (metres of drop per metre of z).
  */
 
+import { ELEVATION_GRADE, ELEVATION_WANDER, ELEVATION_STEP } from './Elevation.js';
+
 /**
  * @typedef {{ amp: number, freq: number, phase: number }} Wave
  *   `amp * sin(z * freq + phase)`. Summed left to right in array order.
@@ -42,6 +44,11 @@
  * @typedef {{ amount: number, from: number, to: number }} Taper
  *   Multiplies by `1 - amount * smoothstep(from, to, z)` — used to flatten and
  *   straighten a run out before the finish.
+ * @typedef {{ samples: number[], step: number, scale: number }} Profile
+ *   A baked table read against z — `samples[z / step] * scale`, interpolated,
+ *   holding its end value beyond the last sample. Added to whatever the
+ *   analytic terms alongside it produce, never replacing them. This is how
+ *   surveyed elevation gets in; see `src/world/Elevation.js`.
  */
 
 /**
@@ -104,6 +111,11 @@ export const CLASSIC = {
     ],
     /** @type {Taper} `amount` is subtracted grade, not a multiplier. */
     runout: { amount: 0.135, from: 2660, to: 2980 },
+    /**
+     * @type {Profile|null} Surveyed steepness, added to `base` and `bells`.
+     * `null` on every hand-written run; see `MASSIF` for the one that uses it.
+     */
+    profile: null,
   },
 
   /**
@@ -151,6 +163,8 @@ export const CLASSIC = {
       { amp: 17, freq: 0.0098, phase: 2.1 },
       { amp: 8.5, freq: 0.019, phase: 0.7 },
     ],
+    /** @type {Profile|null} Surveyed wander, added to `waves`. */
+    profile: null,
   },
 
   /* --- height field, across the slope ---------------------------------- */
@@ -1135,8 +1149,162 @@ export const BACKCOUNTRY = defineRun({
   },
 });
 
+/* ===========================================================================
+ * A mountain nobody designed
+ *
+ * The three runs above are invented: someone chose where the pitches go and
+ * how the line swings, and it shows — each one has a rhythm, because a person
+ * put a rhythm in it. This one was measured instead.
+ *
+ * `src/world/Elevation.js` holds two tables walked down real terrain above
+ * Chamonix, from public elevation tiles, by `tools/bake-run.mjs`. They supply
+ * the steepness and the plan-view wander, and nothing else — thirty-metre
+ * elevation data cannot describe a sixteen-metre piste, so every feature the
+ * rider touches is still the same analytic height field the other runs use.
+ * What the real data buys is the one thing hand-writing sine waves is worst
+ * at: a fall line that does not repeat.
+ *
+ * The profile it produced is genuinely unlike the others. It opens at 0.31, the
+ * steepest ground in the game, mellows to a long 0.11 shelf through the middle
+ * where the other runs would have put their second pitch, and then throws two
+ * more steep rolls in the last kilometre. No one would write that. It is what
+ * the mountain does.
+ * ======================================================================== */
+
+export const MASSIF = defineRun({
+  id: 'massif',
+  name: 'Massif',
+  blurb: 'Three real kilometres, surveyed from the Mont Blanc massif above Chamonix.',
+  rating: 3,
+  hint: 'REAL',
+  features: ['A fall line measured, not invented', 'Steep top, long shelf, two late rolls'],
+  seed: 31411,
+
+  /**
+   * The whole fall line comes from the survey.
+   *
+   * `base` is 0 and `bells` is empty on purpose, and that is the readable form
+   * of "nothing here was chosen": `_gradeAt` adds its analytic terms to the
+   * profile rather than blending with it, so leaving them at zero is what makes
+   * the measured table the only thing deciding steepness. `scale: 1` is the
+   * real gradient, unmodified.
+   *
+   * The runout stays. It is not terrain — it is the finish, and the village has
+   * to be arrived at rather than crashed into.
+   */
+  grade: {
+    base: 0,
+    bells: [],
+    profile: { samples: ELEVATION_GRADE, step: ELEVATION_STEP, scale: 1 },
+    runout: { amount: 0.145, from: 2660, to: 2980 },
+  },
+
+  /**
+   * Swells damped down, because the profile already has the mountain's own
+   * rolls in it at exactly the wavelengths these waves were imitating. Left at
+   * Classic's amplitudes the two beat against each other and the run develops a
+   * chop that is in neither the data nor the design.
+   */
+  undulation: {
+    taper: { amount: 0.85, from: 2560, to: 2940 },
+    waves: [
+      { amp: 1.8, freq: 0.0075, phase: 1.1 },
+      { amp: 0.9, freq: 0.021, phase: 2.4 },
+    ],
+  },
+
+  /**
+   * The line is the real one, at just under half strength.
+   *
+   * `waves` is empty for the same reason `bells` is: the plan view is measured.
+   * The scale is not — the walked line strays 146 m off its own chord, and a
+   * piste that swings nearly three hundred metres across reads as a slalom
+   * course rather than a descent. At 0.45 it reaches about 66 m, which is where
+   * Classic's summed waves top out, so the run wanders as much as the game
+   * already expects a run to wander while doing it in the mountain's shape
+   * rather than a sine's.
+   *
+   * Wide corduroy, because the top pitch is the steepest in the game and the
+   * margin for a wobble has to grow with the speed it is taken at.
+   */
+  track: {
+    halfWidth: 18,
+    edgeSoftness: 3.6,
+    waves: [],
+    profile: { samples: ELEVATION_WANDER, step: ELEVATION_STEP, scale: 0.45 },
+  },
+
+  /** A high alpine bowl: broad and shallow, not the Backcountry's tight walls. */
+  bowl: { strength: 0.085, softness: 38, easeAmount: 0.45, easeFrom: 100, easeTo: 340 },
+
+  /**
+   * Jumps read as terrain here, not as construction: no hip, no step-down, no
+   * gap. The run's signature is the ground itself, and a built lip on the 0.31
+   * pitch would be the thing you remember instead of the pitch.
+   */
+  kickers: {
+    spacing: { min: 200, range: 170 },
+    height: { min: 1.3, range: 1.9 },
+    length: { min: 7, range: 5.5 },
+    width: { min: 8, range: 6 },
+    hip: { enabled: false },
+    stepDown: { enabled: false },
+    gap: { enabled: false },
+  },
+
+  /** Nothing out here was built, so nothing out here is a rail. */
+  rails: { chance: 0 },
+
+  /**
+   * The bump field goes on the shelf, between z = 1150 and 1750, where the
+   * survey's grade sits around 0.12 for six hundred metres. That stretch is the
+   * one place this run would otherwise be dull — it is the flattest ground in
+   * the game — so it gets the one thing that makes flat ground technical.
+   */
+  moguls: {
+    enabled: true,
+    z0: 1150, z1: 1260, z2: 1640, z3: 1750,
+    amp: 0.62,
+    spacingU: 9,
+    spacingZ: 12,
+    skew: 0.35,
+    edgeFade: 3,
+    jitter: 0.35,
+    noiseFreq: 0.02,
+    seed: 4831,
+  },
+
+  fork: { enabled: false },
+  tunnels: { enabled: false, spans: [] },
+
+  /** High alpine: thin above, thickening as the run drops toward the trees. */
+  trees: {
+    seed: 5147,
+    density: 0.6,
+    thin: { from: 25, over: 210, amount: 0.3 },
+    bands: {
+      encroach: { upTo: 0.05, gap: 2.4, range: 3 },
+      near: { upTo: 0.55, gap: 5, range: 30 },
+      mid: { upTo: 0.88, gap: 26, range: 170 },
+      far: { from: 220, range: 260 },
+    },
+  },
+
+  /**
+   * Stars carry this run's rhythm where features do not. Gates are frequent by
+   * this game's standards and can afford to be: with `waves` empty the line
+   * turns over more slowly than any other run, so `gates.maxSlope` actually
+   * accepts long stretches of it.
+   */
+  collectibles: {
+    seed: 6231,
+    stars: { skipChance: 0.35, offTrackExtra: 5, detourChance: 0.5 },
+    gates: { chance: 0.4 },
+  },
+});
+
 /** Every run the game can offer, in the order a menu should list them. */
-export const RUNS = [CLASSIC, PARK, BACKCOUNTRY];
+export const RUNS = [CLASSIC, PARK, BACKCOUNTRY, MASSIF];
 
 /** Look a run up by `id`, falling back to Classic rather than throwing. */
 export function runById(id) {

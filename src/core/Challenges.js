@@ -61,6 +61,20 @@ const BY_RUN = {
     { id: 'back-boost', label: 'Burn a full boost through the trees', test: (s) => s.boosted && s.finished },
     { id: 'back-clean', label: 'Land ten tricks without running out of chances', test: (s) => s.tricks >= 10 && s.wipeouts < 3 },
   ],
+  /*
+   * Massif has no rails and no built jumps, so its three are about the terrain:
+   * survive the opening pitch — the steepest ground in the game and the first
+   * thing that happens to you — then carry speed across the long flat shelf in
+   * the middle, then finish. Asking for grinds here would be asking for
+   * something the run does not contain.
+   */
+  massif: [
+    { id: 'massif-stars', label: 'Collect 20 stars on the mountain', test: (s) => s.stars >= 20 },
+    // `topSpeed` is m/s; 36 is a shade over 130 km/h, which the opening pitch
+    // will hand you if you stay off the brakes down it.
+    { id: 'massif-speed', label: 'Hit 130 km/h off the top pitch', test: (s) => s.topSpeed >= 36 },
+    { id: 'massif-clean', label: 'Reach the village without a wipeout', test: (s) => s.finished && s.wipeouts === 0 },
+  ],
 };
 
 /** Never throws, and never returns something a UI has to be defensive about. */

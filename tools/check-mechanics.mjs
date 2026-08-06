@@ -1674,8 +1674,31 @@ results.runs = await page.evaluate(async () => {
       rating: run.rating,
       // The terrain config, still intact after normalisation.
       gradeBells: Array.isArray(run.grade?.bells) ? run.grade.bells.length : `NOT AN ARRAY: ${run.grade}`,
+      gradeShape: typeof run.grade?.base === 'number' && Array.isArray(run.grade?.bells) &&
+                  typeof run.grade?.runout?.amount === 'number',
+      // A run says how steep it is either by hand or from the survey, and it
+      // has to say it one way or the other.
+      gradeProfile: run.grade?.profile ? run.grade.profile.samples.length : 0,
+      trackWaves: Array.isArray(run.track?.waves) ? run.track.waves.length : -1,
+      trackProfile: run.track?.profile ? run.track.profile.samples.length : 0,
       halfWidth: course.trackHalfWidth,
       widest: +course.maxTrackHalfWidth().toFixed(1),
+      /*
+       * Steepness as the *built course* has it, not as the config states it —
+       * measured off `baseHeight`, which is the integrated fall line every
+       * other system reads. A profile that never made it through `_gradeAt`
+       * would leave the config looking right here and the mountain flat.
+       */
+      ...(() => {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (let z = 0; z <= 2600; z += 25) {
+          const g = (course.baseHeight(z) - course.baseHeight(z + 25)) / 25;
+          if (g < lo) lo = g;
+          if (g > hi) hi = g;
+        }
+        return { builtGradeMin: +lo.toFixed(3), builtGradeMax: +hi.toFixed(3) };
+      })(),
       kickers: course.kickers.length,
       rails: course.rails.length,
       trees: forest.list.length,
@@ -3283,18 +3306,58 @@ const checks = [
   /* ================= END far-side kickers =========================== */
 
   /* ==================================================================
-   * THE THREE RUNS. See the measurement block for what each of these has
-   * actually caught; none of them is hypothetical.
+   * THE RUNS. See the measurement block for what each of these has actually
+   * caught; none of them is hypothetical.
    * ================================================================ */
-  ['the picker hands the course generator an intact mountain',
-    results.runs.every((r) => r.gradeBells >= 1),
-    results.runs.map((r) => `${r.id}: ${r.gradeBells} bell(s)`).join(', ')],
 
-  ['all three runs are offered, gentlest first',
-    results.runs.length === 3 &&
-    results.runs.every((r, i) => r.rating === i + 1) &&
-    results.runs.map((r) => r.id).join(',') === 'classic,park,backcountry',
+  /*
+   * This one exists because of a real bug, and the shape of the bug is why the
+   * assertion is worded the way it is. The card's difficulty rating was once
+   * called `grade`, which is also the name of the terrain's steepness config —
+   * same key, same object literal — so normalisation silently replaced a
+   * mountain with the number 2. What has to hold is that what reaches `Course`
+   * is still *terrain*.
+   *
+   * It used to test that by counting bell curves, which stopped being the right
+   * question the moment a run got its steepness from surveyed data instead:
+   * Massif has no bells at all and is not broken. So it checks the config's
+   * shape, and separately that every run states its steepness one way or the
+   * other.
+   */
+  ['the picker hands the course generator an intact mountain',
+    results.runs.every((r) => r.gradeShape && r.trackWaves >= 0) &&
+    results.runs.every((r) => r.gradeBells >= 1 || r.gradeProfile > 0) &&
+    results.runs.every((r) => r.trackWaves >= 1 || r.trackProfile > 0),
+    results.runs.map((r) =>
+      `${r.id}: ${r.gradeBells} bell(s)/${r.gradeProfile} grade sample(s), ` +
+      `${r.trackWaves} wave(s)/${r.trackProfile} wander sample(s)`).join('; ')],
+
+  ['every run is offered, and no run is gentler than the one before it',
+    results.runs.length === 4 &&
+    results.runs.every((r, i) => i === 0 ? r.rating === 1 : r.rating >= results.runs[i - 1].rating) &&
+    results.runs.map((r) => r.id).join(',') === 'classic,park,backcountry,massif',
     results.runs.map((r) => `${r.id} (${r.rating})`).join(' -> ')],
+
+  /*
+   * Massif's whole claim is that its fall line is measured rather than written,
+   * and the way that claim could quietly become false is the tables going
+   * missing or being replaced by a constant. So: the run has to be visibly
+   * steeper in some places than others, by more than any hand-written preset
+   * varies, and its steepest ground has to be the steepest in the game.
+   */
+  ['the surveyed run really does carry a mountain\'s profile',
+    (() => {
+      const m = results.runs.find((r) => r.id === 'massif');
+      const others = results.runs.filter((r) => r.id !== 'massif');
+      const span = (r) => r.builtGradeMax - r.builtGradeMin;
+      return m.gradeProfile > 100 && m.trackProfile === m.gradeProfile &&
+        m.gradeBells === 0 && m.trackWaves === 0 &&
+        span(m) > Math.max(...others.map(span)) &&
+        m.builtGradeMax > Math.max(...others.map((r) => r.builtGradeMax));
+    })(),
+    results.runs.map((r) =>
+      `${r.id} ${r.builtGradeMin}..${r.builtGradeMax} (span ${(r.builtGradeMax - r.builtGradeMin).toFixed(3)})`
+    ).join(', ')],
 
   ['every run can be ridden from the gate to the finish',
     results.runs.every((r) => r.ride.finished && !r.ride.crashed),

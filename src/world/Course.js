@@ -111,7 +111,34 @@ export class Course {
     const bell = (c, w) => Math.exp(-(((z - c) / w) ** 2));
     let grade = g.base;
     for (const b of g.bells) grade += b.amp * bell(b.center, b.width);
+    grade += this._profileAt(g.profile, z);
     return grade - g.runout.amount * smoothstep(g.runout.from, g.runout.to, z);
+  }
+
+  /**
+   * A baked table of measurements, read as an extra term.
+   *
+   * This is the one door real-world data comes in through. A run that has no
+   * `profile` — which is all of them but `Massif` — returns zero here and is
+   * bit-for-bit what it was before the door existed.
+   *
+   * Deliberately additive rather than a replacement: a preset that wants the
+   * measured shape and nothing else sets its own `base` to 0 and its `bells` to
+   * `[]`, which is legible in the preset itself. A blend weight hidden in here
+   * would mean reading two files to know how steep a run is.
+   *
+   * Outside the table it holds the end value. That is not a fallback so much as
+   * the correct answer: the samples cover the run, and the margin past it
+   * exists so the mesh has somewhere to end — the runout taper dominates the
+   * grade there in any case.
+   */
+  _profileAt(profile, z) {
+    if (!profile) return 0;
+    const { samples, step, scale } = profile;
+    const n = samples.length;
+    const t = clamp(z / step, 0, n - 1.000001);
+    const i = Math.floor(t);
+    return (samples[i] + (samples[i + 1] - samples[i]) * (t - i)) * scale;
   }
 
   /**
@@ -154,7 +181,7 @@ export class Course {
   centerX(z) {
     const t = this.config.track;
     const taper = 1 - t.taper.amount * smoothstep(t.taper.from, t.taper.to, z); // straighten out for the finish
-    return sumWaves(t.waves, z) * taper;
+    return (sumWaves(t.waves, z) + this._profileAt(t.profile, z)) * taper;
   }
 
   /** dX/dZ of the track centre — the track's tangent slope in plan view. */
