@@ -2598,8 +2598,21 @@ const checks = [
   ['the rider\'s textures build without stalling the loading screen',
     ui.atlas.ms < 600 && ui.atlas.maps === 3 && ui.atlas.normalHalfRes,
     `${ui.atlas.ms} ms for ${ui.atlas.maps} maps, normals at half res`],
-  ['the rider is a single skinned mesh', ui.rig.skinnedMeshes === 1,
-    `${ui.rig.skinnedMeshes} skinned meshes, ${ui.rig.vertices} vertices over ${ui.rig.bones} bones`],
+  /*
+   * Two skinned meshes now, not one, and the number is the whole point of the
+   * check: the body, and the silhouette hull that shares its geometry and its
+   * skeleton.
+   *
+   * The original assertion existed to stop the rider drifting back toward the
+   * forty separate boxes it used to be. Two is a deliberate, bounded exception
+   * — the hull is the *same* `BufferGeometry` and the *same* `Skeleton`, so it
+   * costs one extra draw and no extra skinning matrices — and pinning it at
+   * exactly two keeps the original guarantee intact. A third would be a
+   * regression and this still catches it.
+   */
+  ['the rider is one skinned mesh, plus its silhouette', ui.rig.skinnedMeshes === 2,
+    `${ui.rig.skinnedMeshes} skinned meshes (body + outline hull), ` +
+    `${ui.rig.vertices} vertices over ${ui.rig.bones} bones`],
   ['every node the posing code drives exists', ui.rig.missing.length === 0,
     ui.rig.missing.length ? `missing ${ui.rig.missing.join(', ')}` : 'all present, limbs are bones'],
   ['the skin weights are normalised and in range',

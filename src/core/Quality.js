@@ -50,6 +50,20 @@ const TIERS = {
     shafts: 0.34,
     bloomStrength: 0.34,
     bloomThreshold: 0.92,
+    /*
+     * Screen-space ambient occlusion.
+     *
+     * The most valuable single thing in this chain on a scene made of white
+     * shapes against white ground: it is what turns a flat-shaded low-poly
+     * figure into something with volume, and what separates a tree from the
+     * snow it is standing in. See the note in `fx/Postprocess.js` for why it
+     * took a second algorithm to get one that survives a nine-kilometre view.
+     */
+    ao: true,
+    aoQuality: 'Medium',
+    aoIntensity: 3.4,
+    aoRadius: 1.9,
+    aoHalfRes: false,
     // Resort furniture.
     chairlift: true,
     rocks: true,
@@ -91,6 +105,17 @@ const TIERS = {
     msaaSamples: 4,
     bloom: false,
     grade: false,
+    /*
+     * No occlusion pass on a phone.
+     *
+     * It is a full-screen pass with a multi-sample hemisphere kernel and a
+     * denoise, which is exactly the shape of work a mobile GPU is worst at —
+     * and the tier already gives up bloom and the grade for the same reason.
+     * The baked contact shading in the terrain stays on every tier, so a phone
+     * still gets shade pooled around every trunk and post; what it loses is the
+     * occlusion on the rider and between moving things.
+     */
+    ao: false,
     // The lift stays — it is most of what says "resort" — but the far-field
     // rocks thin out, since they are the detail least likely to be looked at.
     chairlift: true,
@@ -106,5 +131,21 @@ const TIERS = {
 };
 
 export function qualityFor(tier) {
-  return { tier, ...TIERS[tier] };
+  const q = { tier, ...TIERS[tier] };
+
+  /*
+   * Per-setting overrides from the query string, for looking at one thing at a
+   * time: `?ao=0` turns the occlusion pass off, `?ao=1` forces it on.
+   *
+   * This exists because the honest way to judge a rendering change is a pair of
+   * otherwise identical frames, and rebuilding the composer by hand between two
+   * screenshots is a good way to end up comparing two different scenes.
+   */
+  if (typeof window !== 'undefined') {
+    const p = new URLSearchParams(window.location.search);
+    if (p.has('ao')) q.ao = p.get('ao') !== '0';
+    if (p.has('aoIntensity')) q.aoIntensity = Number(p.get('aoIntensity'));
+    if (p.has('aoRadius')) q.aoRadius = Number(p.get('aoRadius'));
+  }
+  return q;
 }

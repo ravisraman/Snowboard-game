@@ -13,6 +13,7 @@
     "bundle": "vite build && node tools/build-singlefile.mjs"
   },
   "dependencies": {
+    "n8ao": "^2.0.0",
     "three": "^0.185.1"
   },
   "devDependencies": {

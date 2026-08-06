@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { N8AOPass } from 'n8ao';
 import { SUN_DIRECTION } from '../world/Environment.js';
 
 /**
@@ -129,23 +130,61 @@ export function buildComposer(renderer, scene, camera, quality = {}) {
   });
 
   const composer = new EffectComposer(renderer, target);
-  composer.addPass(new RenderPass(scene, camera));
 
   /*
-   * There is no screen-space ambient occlusion pass here, and that is a
-   * decision rather than an omission.
+   * Screen-space ambient occlusion, on the second attempt.
    *
-   * `GTAOPass` was tried and produced a near-black panorama. Screen-space AO
-   * reads the depth buffer, and this scene runs from half a metre to nine
-   * kilometres: out at the far ranges there is no depth precision left, every
-   * sample reads as occluded, and the mountains turn into silhouettes. Pulling
-   * the far plane in enough to fix it would cut the panorama off.
+   * The first used three's own `GTAOPass` and produced a near-black panorama.
+   * The reason is worth keeping, because it rules out most of the options: the
+   * scene runs from half a metre to nine kilometres, and an AO pass that
+   * compares raw depth samples has no precision left at the far end — every
+   * sample out there reads as occluded and the mountains turn into
+   * silhouettes. Pulling the far plane in enough to fix it would cut the
+   * panorama off, which is most of the picture.
    *
-   * The contact shading is baked into the terrain instead — see the occluder
-   * pass in `Terrain.js`. It only works on the ground and only for things that
-   * exist at build time, which is a real limitation, and it is still the better
-   * trade here.
+   * `N8AO` is a different algorithm rather than a different setting. Its
+   * radius is in *world units* and it fades with distance (`distanceFalloff`),
+   * so the far snowfields and the peaks are simply outside its reach instead of
+   * being wrongly inside it. Occlusion is therefore a near-field effect here,
+   * which is exactly what it should be: the whole job is contact shadow under
+   * the rider, the trees, the kickers and the moguls.
+   *
+   * That matters more on this game than on most. Snow is white, lit from every
+   * direction, and sits against more white — the same lack of contrast that
+   * made the collectible stars, the fork's divider and the ghost each need
+   * their own fix. AO is the general answer: it puts a dark edge where two
+   * white things meet, everywhere, without anything having to be recoloured.
+   *
+   * The baked contact shading in `Terrain.js` stays. It reaches things this
+   * cannot — it is in the terrain's own vertex colours, so it survives on the
+   * quality tiers where this pass is switched off.
    */
+  let ao = null;
+  if (quality.ao !== false) {
+    // Note it *replaces* the render pass rather than following one: N8AO draws
+    // the beauty itself so it can have the depth and normals it needs. Adding
+    // it after a `RenderPass` — which is what the first attempt did, with the
+    // pmndrs-flavoured export on top — renders the scene twice and composites
+    // the wrong one, and the whole frame comes out black.
+    ao = new N8AOPass(scene, camera, size.x, size.y);
+    // Metres. About the height of a rider: big enough to darken the join
+    // between a board and the snow, small enough that a kicker does not shade
+    // the whole slope behind it.
+    ao.configuration.aoRadius = quality.aoRadius ?? 1.9;
+    ao.configuration.distanceFalloff = 1.0;
+    ao.configuration.intensity = quality.aoIntensity ?? 2.6;
+    // Snow in shadow is blue, not grey — the same tint the grade lifts the
+    // shadows with, so the two agree instead of fighting.
+    ao.configuration.color = new THREE.Color('#5f7fa8');
+    ao.configuration.halfRes = quality.aoHalfRes ?? false;
+    // `OutputPass` at the end of this chain owns the colour space. Leaving
+    // N8AO to gamma-correct as well double-corrects everything downstream of it.
+    ao.configuration.gammaCorrection = false;
+    ao.setQualityMode(quality.aoQuality ?? 'Medium');
+    composer.addPass(ao);
+  } else {
+    composer.addPass(new RenderPass(scene, camera));
+  }
 
   // Bloom and the grade are the optional parts. What is *not* optional is the
   // chain itself: the sky is a raw shader that writes its own fragments, so

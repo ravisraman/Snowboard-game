@@ -90,6 +90,25 @@ const MAT = {
   edge: new THREE.MeshStandardMaterial({ color: '#c9d4de', roughness: 0.18, metalness: 0.95 }),
   binding: new THREE.MeshStandardMaterial({ color: '#39414d', roughness: 0.75 }),
 
+  /**
+   * The silhouette.
+   *
+   * Unlit on purpose — an outline that responds to the sun is an outline that
+   * disappears on the lit side, which is the side you are usually looking at.
+   *
+   * The hull is pushed out **along the surface normal**, not scaled. Scaling a
+   * rig outward from its origin gives a line whose thickness is proportional to
+   * distance from that origin: nothing at the hips, where the origin is, and
+   * far too much at the head. A normal offset is the same width everywhere,
+   * which is what an outline is.
+   *
+   * The offset has to be injected *before* `<skinning_vertex>`, so the bones
+   * carry the already-inflated position. After skinning it would be applied in
+   * a space the bones have already left, and the outline would swim away from
+   * the body every time a limb moved.
+   */
+  outline: outlineMaterial(),
+
   /* --- Character accents ---
    *
    * Flat colours with no texture, for the handful of pieces whose colour is
@@ -108,6 +127,31 @@ const MAT = {
   staffWood: new THREE.MeshStandardMaterial({ color: '#6b4f33', roughness: 0.85, flatShading: true }),
   staffKnot: new THREE.MeshStandardMaterial({ color: '#8a6b45', roughness: 0.8, flatShading: true }),
 };
+
+/** Metres the silhouette hull stands off the body, the same all over. */
+const OUTLINE_THICKNESS = 0.022;
+
+function outlineMaterial() {
+  const m = new THREE.MeshBasicMaterial({
+    color: '#16202e',
+    side: THREE.BackSide,
+    // Or the hull's own far side writes depth in front of the body it is meant
+    // to be behind, and the rider renders inside-out.
+    depthWrite: false,
+  });
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uThickness = { value: OUTLINE_THICKNESS };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\n uniform float uThickness;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         transformed += normalize(objectNormal) * uThickness;`
+      );
+  };
+  m.customProgramCacheKey = () => 'rider-outline';
+  return m;
+}
 
 /**
  * The parts that are actually metal, and so are the only ones with anything to
@@ -710,6 +754,34 @@ export function buildRiderModel(characterId = DEFAULT_CHARACTER) {
   skinned.frustumCulled = false;
   body.add(skinned);
   skinned.bind(skeleton);
+
+  /* ---- The silhouette ----
+   *
+   * A second copy of the body, scaled up a little, with its faces flipped so
+   * only the fringe outside the real one survives the depth test. An inverted
+   * hull, and the third time this trick has earned its place in this project:
+   * the collectible stars and the fork's marker poles both exist because a
+   * white thing on white snow has no edge of its own.
+   *
+   * The character is the strongest case of the three. Flat-shaded low-poly
+   * geometry lit from every direction by a snowfield loses its own contours —
+   * an orange jacket against bright snow reads as an orange blob, and the
+   * blob is what "blocky" actually describes. A dark line around it puts the
+   * form back.
+   *
+   * It shares the skeleton rather than owning one. A second `Skeleton` over the
+   * same bones would be a second set of matrices computed every frame for a
+   * mesh that must move identically by definition — and would drift the first
+   * time a pose changed and only one of them was told.
+   */
+  const outline = new THREE.SkinnedMesh(geometry, MAT.outline);
+  outline.frustumCulled = false;
+  // Never in the shadow map: the hull is bigger than the body, so it would
+  // cast a shadow slightly too large for the thing making it.
+  outline.castShadow = false;
+  outline.receiveShadow = false;
+  body.add(outline);
+  outline.bind(skeleton);
 
   /* ---- Rigid props, hanging off the bones ---- */
 
