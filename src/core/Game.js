@@ -11,6 +11,7 @@ import { buildSky, buildMountains, buildClouds, buildLighting, buildSkyProbe, HO
 import { REFLECTIVE_MATERIALS } from '../entities/RiderModel.js';
 import { buildResort } from '../world/Resort.js';
 import { Rider, RIDER_TUNING } from '../entities/Rider.js';
+import { Ghost, GhostRecorder, loadGhost } from '../entities/Ghost.js';
 import { Skiers } from '../entities/Skiers.js';
 import { SnowSpray } from '../fx/SnowSpray.js';
 import { GameAudio } from '../fx/Audio.js';
@@ -24,6 +25,7 @@ import { difficulty, applyDifficulty, loadDifficulty, presetInfo } from './Diffi
 // Which mountain, and remembering the choice across the reload a switch needs.
 import { runInfo, loadRun, saveRun, armDropIn, takeDropIn } from './RunSelect.js';
 import { loadCharacter, saveCharacter, characterById } from './CharacterSelect.js';
+import { settle as settleChallenges, progressFor } from './Challenges.js';
 import { Leaderboard } from '../services/Leaderboard.js';
 import { Profile } from '../services/Profile.js';
 import { clamp } from './mathx.js';
@@ -224,6 +226,12 @@ export class Game {
     this.scene.add(this.skiers.group);
 
     this.rider = new Rider(course, this.characterId);
+
+    /* The rabbit. Built once and reused for the life of the page — a restart
+     * reloads its data, not its geometry. */
+    this.ghost = new Ghost(this.characterId);
+    this.scene.add(this.ghost.root);
+    this.ghostRecorder = new GhostRecorder();
     // Same reason `_builtRunId` exists: what is *standing* is not what is
     // *selected*, and `start` needs to know the difference.
     this._builtCharacterId = characterById(this.characterId).id;
@@ -259,6 +267,11 @@ export class Game {
     this.tracks.reset();
     this.score.reset();
     this.collectibles.resetRun();
+    // A fresh recording, and the stored best reloaded — which matters after a
+    // run that *beat* it, since the next run should chase the new one.
+    this.ghostRecorder.reset();
+    this.ghost.load(loadGhost(this.runId, this.difficultyName));
+    this.ghost.reset();
     // Straight back to full daylight and dry audio. Restarting from inside a
     // bore is the one case the per-frame blend cannot cover on its own — the
     // rider is at the gate again a frame later, but nothing else would have
@@ -275,6 +288,9 @@ export class Game {
     this._finishShown = false;
     this.wipeoutsLeft = WIPEOUTS;
     this.wipeoutsUsed = 0;
+    // Whether boost was ever actually spent — a challenge asks, and neither
+    // the rider nor the score keeps a run-long record of it.
+    this.everBoosted = false;
     this.hud.setWipeouts(this.wipeoutsLeft, WIPEOUTS);
     this.hud.setStuck(false);
     this.hud.resetTicker();
@@ -379,6 +395,20 @@ export class Game {
    */
   async _fileRun({ finished, elapsed }) {
     const r = this.rider;
+
+    /* Store the run as a ghost if it beat the one already there.
+     *
+     * Before the leaderboard call, and not awaited: `submit` is async and the
+     * results screen is already up, so anything downstream of an await here is
+     * racing the player's next press of RETRY.
+     */
+    const beat = this.ghostRecorder.saveIfBest(this._builtRunId, this.difficultyName, {
+      finished,
+      elapsed,
+      distance: r.position.z,
+    });
+    if (beat) this.hud.flashCallout('NEW GHOST');
+
     const result = await this.leaderboard.submit({
       name: this.profile.display,
       score: Math.round(this.score?.total ?? 0),
@@ -473,6 +503,30 @@ export class Game {
     this.chase.kick(1.3);
     this.spray.burst(r.position, 40, 4, r.powder);
     this.hud.flashBump('CLIPPED A TREE');
+  }
+
+  /**
+   * Everything the challenges are scored against, in one flat bag.
+   *
+   * Assembled here and nowhere else: `Challenges.js` never sees the world, the
+   * rider or the score object, which is what keeps a challenge a single line
+   * rather than a hook in the game loop.
+   */
+  _runStats(finished) {
+    const s = this.score;
+    return {
+      stars: s.starsCollected,
+      bestSpin: s.bestSpin,
+      tricks: s.tricksLanded,
+      grinds: s.grindsLanded,
+      gates: s.gateBest,
+      longestAir: this.rider.longestAir,
+      topSpeed: this.rider.topSpeed,
+      score: Math.round(s.total),
+      wipeouts: this.wipeoutsUsed,
+      boosted: this.everBoosted,
+      finished,
+    };
   }
 
   /**
@@ -587,6 +641,7 @@ export class Game {
         else {
           this.state = 'crashed';
           this.hud.setWipeoutsUsed(this.wipeoutsUsed);
+          this.hud.showChallenges(settleChallenges(this.runId, this._runStats(false)));
           this.hud.showCrash(this.rider, this.elapsed, this.rider.position.z, this.score);
           this._fileRun({ finished: false, elapsed: this.elapsed });
         }
@@ -598,6 +653,7 @@ export class Game {
       if (this.finishTimer > 1.6 && !this._finishShown) {
         this._finishShown = true;
         this.hud.setWipeoutsUsed(this.wipeoutsUsed);
+        this.hud.showChallenges(settleChallenges(this.runId, this._runStats(true)));
         this.hud.showFinish(this.rider, this.finishElapsed, this.score);
         this._fileRun({ finished: true, elapsed: this.finishElapsed });
         this.audio.cheer();
@@ -615,6 +671,11 @@ export class Game {
 
     if (this.state === 'riding') {
       this.elapsed += dt;
+      // Recorded and replayed against the *wall* clock, not the slow-motion
+      // one: a ghost is a record of a past run and has no business slowing
+      // down because this one is having a moment.
+      this.ghostRecorder.sample(dt, this.rider, this.elapsed);
+      this.ghost.update(this.elapsed);
       this.rider.update(sdt, this.input);
       this.score.update(sdt, this.rider);
       if (this.rider.trickLanded) {
@@ -632,6 +693,7 @@ export class Game {
           }
         }
       }
+      if (this.rider.boosting) this.everBoosted = true;
       if (this.rider.groundTrick) this.score.onGroundTrick(this.rider.groundTrick);
       if (this.rider.grindPopped) {
         const award = this.score.onGrindPopped(this.rider.grindPopped.seconds);

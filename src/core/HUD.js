@@ -5,6 +5,7 @@ import { presetInfo } from './Difficulty.js';
 // touches `world/Runs.js` directly.
 import { RUNS, runInfo } from './RunSelect.js';
 import { CHARACTERS, characterById } from './CharacterSelect.js';
+import { challengesFor, loadDone, progressFor } from './Challenges.js';
 
 /**
  * The HUD and the overlay screens. Deliberately thin: it reads game state and
@@ -74,6 +75,8 @@ export class HUD {
       crashScore: $('crash-score'),
       finishLog: $('finish-log'),
       crashLog: $('crash-log'),
+      finishChallenges: $('finish-challenges'),
+      crashChallenges: $('crash-challenges'),
       loading: $('loading'),
       start: $('btn-start'),
       retry: $('btn-retry'),
@@ -124,6 +127,9 @@ export class HUD {
 
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
+    // Read once for the whole picker rather than per card.
+    const done = loadDone();
+
     picker.innerHTML = RUNS.map((run) => {
       // The hint word says it, the dots say it again without words. A child
       // who cannot yet read "GENTLE" can still count to one.
@@ -133,6 +139,13 @@ export class HUD {
       const features = run.features
         .map((f) => `<span>${esc(f)}</span>`)
         .join('');
+      // What is left to do here, before you have committed to riding it. A
+      // challenge nobody can see until the results screen is a challenge
+      // nobody sets out to complete.
+      const p = progressFor(run.id, done);
+      const challenges = challengesFor(run.id)
+        .map((c) => `<li class="${done.has(c.id) ? 'done' : ''}">${esc(c.label)}</li>`)
+        .join('');
       return `<button class="run-card" type="button" data-run="${esc(run.id)}" data-grade="${run.rating}" aria-pressed="false">
           <span class="run-head">
             <span class="run-hint">${esc(run.hint)}</span>
@@ -141,6 +154,10 @@ export class HUD {
           <span class="run-name">${esc(run.name)}</span>
           <span class="run-desc">${esc(run.description)}</span>
           ${features ? `<span class="run-features">${features}</span>` : ''}
+          <span class="run-challenges">
+            <span class="run-ch-count">${p.done}/${p.total} challenges</span>
+            <ul class="run-ch-list">${challenges}</ul>
+          </span>
         </button>`;
     }).join('');
 
@@ -236,8 +253,14 @@ export class HUD {
 
       // Keyboard and touch get their own list, so a row without a touch
       // equivalent simply isn't offered to a phone.
+      // `keys` is optional: a row with none is a *note* rather than a binding —
+      // "three wipeouts a run" belongs in this list and is not something you
+      // press. Assuming it was always there cost a boot: `r.keys.map` on a
+      // note row throws before the first frame, and the whole game with it.
       const keyRows = group.rows
-        .map((r) => `<div class="ctrl">${r.keys.map((k) => `<kbd>${esc(k)}</kbd>`).join('')}<span>${esc(r.label)}</span></div>`)
+        .map((r) => `<div class="ctrl${r.keys ? '' : ' ctrl-note'}">` +
+          `${(r.keys ?? []).map((k) => `<kbd>${esc(k)}</kbd>`).join('')}` +
+          `<span>${esc(r.label)}</span></div>`)
         .join('');
       html.push(`<div class="controls keys-only">${keyRows}</div>`);
 
@@ -364,6 +387,33 @@ export class HUD {
    * the row never changes width and the cost of a wipeout is visible as a gap
    * rather than as a number that got smaller when they were not looking.
    */
+  /**
+   * The challenge list on the results screens.
+   *
+   * Written into both, because a challenge is settled whether or not the run
+   * finished — going down on the last kicker should not cost you the stars you
+   * collected on the way, and one that can only be completed on a clean run is
+   * one most seven-year-olds will never see completed.
+   *
+   * Freshly-earned ones are marked separately from already-earned ones. That
+   * distinction is the entire celebration: a tick that was already there is
+   * furniture, and a tick that appeared because of the run just ridden is the
+   * reason to ride another.
+   */
+  showChallenges({ results, fresh }) {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const html = results.map((r) => {
+      const state = r.passed && !r.wasDone ? 'fresh' : r.passed || r.wasDone ? 'done' : '';
+      const mark = r.passed || r.wasDone ? '✓' : '○';
+      return `<li class="${state}"><span class="ch-mark" aria-hidden="true">${mark}</span>${esc(r.label)}` +
+        `${state === 'fresh' ? '<span class="ch-new">NEW</span>' : ''}</li>`;
+    }).join('');
+    for (const el of [this.el.finishChallenges, this.el.crashChallenges]) {
+      if (el) el.innerHTML = html;
+    }
+    if (fresh.length) this.flashCallout(fresh.length > 1 ? 'CHALLENGES DONE!' : 'CHALLENGE DONE!');
+  }
+
   /** Written into both results screens by `Game` before either is shown. */
   setWipeoutsUsed(n) {
     if (this.el.finishWipeouts) this.el.finishWipeouts.textContent = n;

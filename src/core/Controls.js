@@ -14,9 +14,9 @@ export const CONTROL_GROUPS = [
     title: 'Riding',
     rows: [
       { keys: ['A', 'D'], touch: 'Drag', label: 'Carve onto the heel or toe edge' },
-      { keys: ['W'], touch: 'TUCK', label: 'Tuck for speed' },
+      { keys: ['W'], touch: 'TUCK', label: 'Tuck for speed — and to burn boost, once you have some' },
       { keys: ['S'], touch: 'BRAKE', label: 'Brake and slide' },
-      { keys: ['Space'], touch: 'OLLIE', label: 'Ollie — time it at the lip for a bigger pop' },
+      { keys: ['Space'], touch: 'OLLIE', label: 'Ollie — hold to load it, release to pop. Time it at the lip' },
       { keys: ['Shift'], touch: 'BUTTER', label: 'Press the board — then steer to spin it on the snow' },
     ],
   },
@@ -34,6 +34,9 @@ export const CONTROL_GROUPS = [
     title: 'When it goes wrong',
     rows: [
       { keys: ['E'], touch: 'Prompt', label: 'Drop back onto the piste, once you are bogged down' },
+      // No `keys`: a note rather than a binding. The panel renders these
+      // without a key cap — see `_buildHelp`.
+      { touch: '—', label: 'Three wipeouts a run — go down a fourth time and it is over' },
       { keys: ['R'], touch: 'Prompt', label: 'Restart the run, at any time' },
       { keys: ['Esc'], touch: '?', label: 'Pause, and bring this list back up' },
     ],

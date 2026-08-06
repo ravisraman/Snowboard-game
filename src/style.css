@@ -168,6 +168,90 @@ kbd {
   overflow: hidden;
 }
 
+/* A line in the controls panel that is information rather than a binding.
+   Indented to where the labels start, so the column of key caps stays a
+   clean column. */
+.ctrl-note { padding-left: 4px; opacity: 0.72; font-style: italic; }
+
+/* ---- Challenges ------------------------------------------------------
+   On the results screens: what there was to do here, and what the run just
+   ridden actually did. A tick that was already there is furniture; the one
+   that appeared because of *this* run is the reason to ride another, so it
+   gets the orange and the badge. */
+.challenges {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+  text-align: left;
+}
+
+.challenges li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  opacity: 0.5;
+}
+
+.challenges li.done { opacity: 0.82; }
+
+.challenges li.fresh {
+  opacity: 1;
+  color: var(--orange);
+  font-weight: 700;
+}
+
+.ch-mark { font-size: 11px; opacity: 0.9; }
+
+.ch-new {
+  margin-left: auto;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 122, 52, 0.24);
+}
+
+/* On the run card, so a challenge is visible before you commit to the run
+   rather than only on the way out of it. */
+.run-challenges {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: grid;
+  gap: 3px;
+}
+
+.run-ch-count {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  opacity: 0.55;
+}
+
+.run-ch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 10px;
+  line-height: 1.3;
+  opacity: 0.45;
+}
+
+.run-ch-list li::before {
+  content: '○';
+  margin-right: 5px;
+  font-size: 8px;
+}
+
+.run-ch-list li.done { opacity: 1; }
+.run-ch-list li.done::before { content: '✓'; color: #8ee6a0; }
+
 /* Chances left, as little boards rather than as a number. Three shapes a child
    can count, for the same reason the run cards carry dots as well as words.
    Spent ones stay in place and go dim, so the row never changes width and the

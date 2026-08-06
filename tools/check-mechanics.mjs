@@ -1702,6 +1702,133 @@ results.runs = await page.evaluate(async () => {
 });
 
 /* ==================================================================
+ * THE FUN PASS — boost, charged ollies, wipeouts, challenges, ghosts.
+ *
+ * Five changes aimed at gameplay rather than at looks, and each has one thing
+ * that would quietly undo it:
+ *
+ *   - a charged ollie that changed what a *tap* does would invalidate every
+ *     player's existing sense of the timing;
+ *   - a boost ceiling expressed as an absolute speed gives the gentle tuning a
+ *     bigger advantage than the fast one, which is backwards. It happened: as
+ *     a fixed 43 m/s, cruise gained 66 per cent and original 20;
+ *   - a wipeout that recovers without clearing the tumble leaves the rider
+ *     riding away on their side, because the tumble is integrated into the
+ *     model's rotation rather than stored as a number;
+ *   - a challenge that reports itself as freshly earned on every subsequent
+ *     run makes the celebration meaningless.
+ * ================================================================ */
+results.fun = await page.evaluate(async () => {
+  const g = window.game;
+  const dt = 1 / 120;
+  const NONE = {
+    steer: 0, tuck: false, brake: false, press: false, grabType: null,
+    jumpPressed: false, jumpReleased: false, jumpHeld: false,
+  };
+  const { RIDER_TUNING } = await import('/src/entities/Rider.js');
+  const { settle } = await import('/src/core/Challenges.js');
+  const r = g.rider;
+  const c = g.course;
+  const out = {};
+
+  /* ---- Charged ollie ---- */
+  const pop = (holdSeconds) => {
+    r.reset();
+    r.speed = 20;
+    r.settle();
+    for (let i = 0; i < holdSeconds * 120; i++) r.update(dt, { ...NONE, jumpHeld: true });
+    const charge = +r.ollieCharge.toFixed(3);
+    r.update(dt, { ...NONE, jumpReleased: true });
+    let apex = 0;
+    for (let i = 0; i < 400; i++) {
+      r.update(dt, NONE);
+      apex = Math.max(apex, r.position.y - c.groundHeight(r.position.x, r.position.z));
+      if (r.grounded && i > 5) break;
+    }
+    return { charge, apex: +apex.toFixed(2) };
+  };
+  out.tap = pop(0);
+  out.charged = pop(0.6);
+
+  // The touch button and this harness both set `jumpPressed` with nothing
+  // held. That has to still launch, on the same frame, at zero charge.
+  r.reset(); r.speed = 20; r.settle();
+  r.update(dt, { ...NONE, jumpPressed: true });
+  out.tapPathLaunches = !r.grounded;
+
+  /* ---- Boost ---- */
+  const topOut = (boost) => {
+    r.reset(); r.speed = RIDER_TUNING.maxSpeed * 0.85; r.settle();
+    r.boost = boost;
+    let top = 0;
+    for (let i = 0; i < 120 * 25; i++) { r.update(dt, { ...NONE, tuck: true }); top = Math.max(top, r.speed); }
+    return +top.toFixed(2);
+  };
+  out.plainTop = topOut(0);
+  out.boostedTop = topOut(1);
+  out.boostCeiling = +(RIDER_TUNING.maxSpeed * RIDER_TUNING.boostMaxScale).toFixed(2);
+
+  // Below the arm threshold a tuck must not spend a drop.
+  r.reset(); r.speed = 8; r.settle(); r.boost = 1;
+  for (let i = 0; i < 120 * 4; i++) r.update(dt, { ...NONE, tuck: true });
+  out.slowTuckKeeps = +r.boost.toFixed(3);
+
+  /* ---- Wipeouts ---- */
+  g.reset();
+  g.state = 'riding';
+  const fake = {
+    ...NONE, restartPressed: false, helpPressed: false, endFrame() {}, clear() {},
+  };
+  const realInput = g.input;
+  const realHits = g.skiers.hits.bind(g.skiers);
+  g.input = fake;
+  g.skiers.hits = () => null;
+
+  const runFrames = (secs) => { for (let i = 0; i < secs * 120; i++) g.update(dt); };
+  runFrames(4);
+  out.wipeoutsAtStart = g.wipeoutsLeft;
+  out.wipeoutCycle = [];
+  for (let n = 0; n < 4; n++) {
+    g.rider.boost = 0.8;
+    g._crash('harness');
+    runFrames(2.6);
+    const tilt = g.rider.model.tilt.rotation;
+    out.wipeoutCycle.push({
+      state: g.state,
+      left: g.wipeoutsLeft,
+      crashed: g.rider.crashed,
+      boost: +g.rider.boost.toFixed(2),
+      // The tumble lives in the model's rotation, so "upright" is the only
+      // way to tell a real recovery from a rider dragged along on their side.
+      upright: Math.abs(tilt.z) < 0.4 && Math.abs(tilt.y) < 0.4,
+      onPiste: Math.abs(c.trackOffset(g.rider.position.x, g.rider.position.z)) < 4,
+    });
+    if (g.state !== 'riding') break;
+  }
+  g.input = realInput;
+  g.skiers.hits = realHits;
+
+  /* ---- Challenges ---- */
+  try { localStorage.removeItem('alpine-carve.challenges'); } catch { /* ignore */ }
+  const easy = { stars: 99, bestSpin: 720, tricks: 20, grinds: 9, gates: 5,
+    longestAir: 3, topSpeed: 30, score: 99999, wipeouts: 0, boosted: true, finished: true };
+  const first = settle('classic', easy);
+  const again = settle('classic', easy);
+  out.challenges = {
+    total: first.results.length,
+    freshFirst: first.fresh.length,
+    freshAgain: again.fresh.length,
+    passedAgain: again.results.filter((x) => x.passed).length,
+  };
+  // And a run that did nothing earns nothing.
+  const none = { stars: 0, bestSpin: 0, tricks: 0, grinds: 0, gates: 0,
+    longestAir: 0, topSpeed: 0, score: 0, wipeouts: 3, boosted: false, finished: false };
+  out.challenges.passedOnNothing = settle('park', none).results.filter((x) => x.passed).length;
+
+  return out;
+});
+
+/* ==================================================================
  * CHARACTERS — that a costume is only a costume.
  *
  * Three characters share one skeleton, one set of poses and one physics model.
@@ -3223,6 +3350,61 @@ const checks = [
     })(),
     results.characters.map((c) => `${c.id} ${c.meshes} meshes / ${c.tris} tris`).join(', ')],
   /* ==================== END characters ============================== */
+
+  /* ==================================================================
+   * THE FUN PASS. See the measurement block for what each of these guards.
+   * ================================================================ */
+  /*
+   * Not pinned to a height. The impulse is multiplied by `1 + boost * charge`,
+   * so a charge of exactly 0 is the old behaviour *by construction* — and the
+   * height it produces depends on the tuning in force, which is how the first
+   * version of this check came to assert cruise's 2.97 m against original's
+   * 1.66 m. What has to be true is the charge, and that the press-without-hold
+   * path the touch button and this harness both use still launches at all.
+   */
+  ['a tap ollies exactly as high as it always did',
+    results.fun.tap.charge === 0 && results.fun.tapPathLaunches && results.fun.tap.apex > 0.5,
+    `${results.fun.tap.apex} m at charge 0 (x1.00 impulse), and the ` +
+    `press-without-hold path still launches`],
+
+  ['and holding it pops meaningfully higher',
+    results.fun.charged.charge === 1 &&
+    results.fun.charged.apex > results.fun.tap.apex * 1.4,
+    `${results.fun.tap.apex} m tapped -> ${results.fun.charged.apex} m fully loaded ` +
+    `(+${Math.round((results.fun.charged.apex / results.fun.tap.apex - 1) * 100)}%)`],
+
+  ['boost lifts the ceiling, and by the same share on either tuning',
+    results.fun.boostedTop > results.fun.plainTop * 1.1 &&
+    Math.abs(results.fun.boostedTop - results.fun.boostCeiling) < 1.2,
+    `${(results.fun.plainTop * 3.6).toFixed(0)} -> ${(results.fun.boostedTop * 3.6).toFixed(0)} km/h, ` +
+    `against a ceiling of ${(results.fun.boostCeiling * 3.6).toFixed(0)} km/h ` +
+    `(a fixed multiple of this tuning's top speed, not an absolute)`],
+
+  ['and tucking below the arm speed spends none of it',
+    results.fun.slowTuckKeeps === 1,
+    `four seconds of tuck at 29 km/h left the meter at ${results.fun.slowTuckKeeps}`],
+
+  ['three wipeouts, and the rider gets up from every one of them',
+    results.fun.wipeoutsAtStart === 3 &&
+    results.fun.wipeoutCycle.slice(0, 3).every((w, i) =>
+      w.state === 'riding' && w.left === 2 - i && !w.crashed && w.upright && w.onPiste && w.boost === 0),
+    results.fun.wipeoutCycle.map((w) =>
+      `${w.state}/${w.left}${w.upright ? '' : ' NOT UPRIGHT'}${w.onPiste ? '' : ' OFF PISTE'}`).join(' -> ')],
+
+  ['and the fourth one actually ends the run',
+    results.fun.wipeoutCycle.length === 4 &&
+    results.fun.wipeoutCycle[3].state === 'crashed' && results.fun.wipeoutCycle[3].left === 0,
+    `run ended after ${results.fun.wipeoutCycle.length} crashes`],
+
+  ['a challenge is celebrated once, then stays done',
+    results.fun.challenges.freshFirst === 3 &&
+    results.fun.challenges.freshAgain === 0 &&
+    results.fun.challenges.passedAgain === 3 &&
+    results.fun.challenges.passedOnNothing === 0,
+    `${results.fun.challenges.freshFirst} new on the first run, ` +
+    `${results.fun.challenges.freshAgain} on an identical second, ` +
+    `${results.fun.challenges.passedOnNothing} earned by doing nothing`],
+  /* ==================== END the fun pass ============================ */
 ];
 
 console.log(JSON.stringify(results, null, 2));

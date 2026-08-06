@@ -116,6 +116,51 @@ Two of the features are worth a note because they are not what they look like:
 run, and fails on the overlaps that matter — a jump promoted onto the fork's
 divider, say. Re-run it after changing any seed or spacing.
 
+## The loop
+
+Five things carry a run, and they are deliberately entangled — each one is a
+reason to do the next.
+
+**Tricks buy speed.** Landing a trick fills a boost meter; a tuck spends it for
+speed above a ceiling nothing else reaches. Before this, a rider who never
+pressed a trick button finished at exactly the same speed as one who landed
+everything, because tricks paid only in points.
+
+It is spent through the *tuck* key rather than a key of its own, and only while
+the tuck is actually pushing past the ordinary top speed. A dedicated boost
+button is one more thing to know before the game is fun; simply draining on
+tuck would empty the meter the moment it filled. Tucking out of a slow corner
+costs nothing, because there the tuck's own thrust is doing the work.
+
+The ceiling is a *multiple* of the tuning's top speed. As a fixed number it
+handed the gentle tuning a 66 per cent speed increase and the fast one 20.
+
+**The ollie charges.** Hold to compress, release to pop — 1.66 m of flat ollie
+at a tap against 2.78 m fully loaded, on the original tuning. A tap is worth
+exactly what it always was: the multiplier is `1 + boost × charge`, so zero
+charge is the old behaviour by construction.
+
+**Three wipeouts.** A crash used to end the run outright. Now it costs a
+wipeout, the multiplier and the boost, and you get up slowly on the piste while
+the clock runs. Only the fourth ends things. The score you had banked is still
+yours.
+
+**Three challenges per run**, listed on the run card *before* you commit to
+riding it and settled afterwards whether or not you finished — going down on
+the last kicker should not cost you the stars you collected on the way. They
+live in `core/Challenges.js` as a `test(stats)` over a flat bag of run totals,
+so a new one is a line rather than a hook in the game loop.
+
+**A ghost of your best run** on that mountain and tuning, as a translucent blue
+rider. It stores *positions*, not inputs: a ghost that replayed inputs would
+have to be re-simulated, and any physics change would silently invalidate every
+stored run. Ten samples a second is about 11 KB for a full descent.
+
+It is a flat deep blue rather than a faded copy of your character. The faded
+version was the obvious one and was nearly invisible — a translucent pale rider
+on bright snow is a light thing on a light thing, which is the same problem the
+collectible stars had.
+
 ## Characters
 
 Three of them, picked on the title screen next to the run: **the Rider** (the

@@ -78,6 +78,13 @@ export class Score {
     this.starsCollected = 0;
     this.gateStreak = 0;
     this.gateBest = 0;
+
+    /* Run totals the challenges are scored against. Kept here rather than in
+     * `Game` because this object already owns "what happened this run", and a
+     * second tally living somewhere else is a second tally to forget to
+     * reset. */
+    this.bestSpin = 0;      // degrees, biggest *landed* rotation
+    this.grindsLanded = 0;
   }
 
   /** The run's best tricks, biggest first — what the results screen shows. */
@@ -108,6 +115,9 @@ export class Score {
   /** A landing, judged. Returns the award for the HUD, or null if it paid nothing. */
   onTrickLanded(trick) {
     const halfTurns = Math.round(trick.spinDegrees / 180);
+    // Recorded on the landing, not on the rotation: spinning 900 degrees and
+    // going down on the knuckle is not a 900.
+    if (trick.clean) this.bestSpin = Math.max(this.bestSpin, Math.abs(trick.spinDegrees));
     const grabbed = trick.grabTime >= TUNING.grabMinimum;
     const grab = grabbed ? (GRABS[trick.grabType] ?? GRABS.indy) : null;
 
@@ -213,6 +223,7 @@ export class Score {
     this.combo = Math.min(TUNING.comboMax, this.combo + 1);
     this.comboTimer = TUNING.comboDecay;
     this.tricksLanded++;
+    this.grindsLanded++;
     this.biggestTrick = Math.max(this.biggestTrick, award.points);
     return award;
   }
