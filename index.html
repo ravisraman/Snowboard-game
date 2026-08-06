@@ -75,15 +75,15 @@
     <div id="stuck-prompt" class="stuck">
       <p class="stuck-title">Bogged down</p>
       <p class="stuck-hint keys-only">
-        <kbd>Space</kbd> skates you forward · <kbd>A</kbd><kbd>D</kbd> swings the board round
+        <kbd>Space</kbd> skates you forward · <kbd>&larr;</kbd><kbd>&rarr;</kbd> swings the board round
       </p>
       <p class="stuck-hint touch-only">OLLIE skates you forward · drag to swing the board round</p>
       <div class="stuck-actions">
         <button id="btn-rescue" class="stuck-btn" type="button">
-          Back to the piste <kbd class="keys-only">E</kbd>
+          Back to the piste <kbd class="keys-only">Backspace</kbd>
         </button>
         <button id="btn-restart-run" class="stuck-btn stuck-btn-quiet" type="button">
-          Restart run <kbd class="keys-only">R</kbd>
+          Restart run <kbd class="keys-only">Enter</kbd>
         </button>
       </div>
     </div>
@@ -110,17 +110,21 @@
       <section id="screen-title" class="screen">
         <h1 class="title">ALPINE<span>CARVE</span></h1>
         <p class="tagline">Spin, grab and carve your way to the village. Land it clean to build the multiplier.</p>
+        <!-- The whole game on five keys. The letters still work and are listed
+             in the full panel; this is the first thing anyone reads, so it says
+             the one scheme rather than offering a choice. -->
         <div class="controls keys-only">
-          <div class="ctrl"><kbd>A</kbd><kbd>D</kbd><span>Carve · in the air, spin</span></div>
-          <div class="ctrl"><kbd>S</kbd><span>Brake · in the air, grab</span></div>
-          <div class="ctrl"><kbd>W</kbd><span>Tuck for speed — and to burn boost</span></div>
-          <div class="ctrl"><kbd>Space</kbd><span>Ollie — hold to load, release to pop</span></div>
+          <div class="ctrl"><span class="ctrl-keys"><kbd>&larr;</kbd><kbd>&rarr;</kbd></span><span class="ctrl-label">Carve · in the air, spin</span></div>
+          <div class="ctrl"><span class="ctrl-keys"><kbd>&darr;</kbd></span><span class="ctrl-label">Brake · in the air, an indy grab</span></div>
+          <div class="ctrl"><span class="ctrl-keys"><kbd>&uarr;</kbd></span><span class="ctrl-label">Tuck for speed · in the air, a nose grab</span></div>
+          <div class="ctrl"><span class="ctrl-keys"><kbd>Space</kbd></span><span class="ctrl-label">Ollie — hold to load, release to pop</span></div>
+          <div class="ctrl"><span class="ctrl-keys"><kbd>Shift</kbd></span><span class="ctrl-label">Press the board · in the air, hold it with &uarr; or &darr; for the harder grabs</span></div>
         </div>
         <div class="controls touch-only">
-          <div class="ctrl"><span class="tkey">Drag</span><span>Left thumb carves the edge</span></div>
-          <div class="ctrl"><span class="tkey">Ollie</span><span>Tap to pop off the kickers</span></div>
-          <div class="ctrl"><span class="tkey">Tuck</span><span>Hold for speed</span></div>
-          <div class="ctrl"><span class="tkey">In the air</span><span>Drag to spin, hold GRAB</span></div>
+          <div class="ctrl"><span class="tkey">Drag</span><span class="ctrl-label">Left thumb carves the edge</span></div>
+          <div class="ctrl"><span class="tkey">Ollie</span><span class="ctrl-label">Tap to pop off the kickers</span></div>
+          <div class="ctrl"><span class="tkey">Tuck</span><span class="ctrl-label">Hold for speed</span></div>
+          <div class="ctrl"><span class="tkey">In the air</span><span class="ctrl-label">Drag to spin, hold GRAB</span></div>
         </div>
         <div class="rider-name">
           <label for="name-input">RIDER</label>
@@ -192,7 +196,7 @@
           <ol id="crash-board" class="board"></ol>
         </div>
         <button id="btn-retry" class="cta">RIDE AGAIN</button>
-        <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
+        <p class="hint keys-only">Press <kbd>Enter</kbd> to restart</p>
       </section>
 
       <!-- Finish -->
@@ -222,7 +226,7 @@
           <ol id="finish-board" class="board"></ol>
         </div>
         <button id="btn-again" class="cta">RIDE AGAIN</button>
-        <p class="hint keys-only">Press <kbd>R</kbd> to restart</p>
+        <p class="hint keys-only">Press <kbd>Enter</kbd> to restart</p>
       </section>
     </div>
 

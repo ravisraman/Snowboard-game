@@ -3,19 +3,34 @@
  *
  * The title screen, the pause panel and the phone's button labels all render
  * from this, so a new trick is one row here rather than three edits in three
- * files that quietly drift apart. `keys` is the desktop binding and `touch` is
- * the on-screen equivalent; a row with no `touch` simply doesn't appear in the
- * phone list, which is how the two schemes are allowed to differ without the
- * player ever being told something untrue.
+ * files that quietly drift apart. `keys` is the binding, `alt` is the same
+ * thing for a hand on WASD, and `touch` is the on-screen equivalent; a row with
+ * no `touch` simply doesn't appear in the phone list, which is how the two
+ * schemes are allowed to differ without the player ever being told something
+ * untrue.
+ *
+ * ---------------------------------------------------------------------------
+ * Why the arrows are listed first
+ * ---------------------------------------------------------------------------
+ * They used to be listed second, or rather not at all: every row said A, D, W,
+ * S, and the arrows worked but were nowhere on screen. Anyone playing on the
+ * arrows — which is most people who have never played a keyboard game before,
+ * and every child — was reading a panel about a keyboard they were not using
+ * and had to translate it themselves.
+ *
+ * So `keys` is now the arrow scheme, and it is *complete*: five keys reach
+ * every control and all four grabs. `alt` carries the letters for anyone who
+ * prefers them, and both are live at once, which is also how two people share
+ * one keyboard.
  */
 
 export const CONTROL_GROUPS = [
   {
     title: 'Riding',
     rows: [
-      { keys: ['A', 'D'], touch: 'Drag', label: 'Carve onto the heel or toe edge' },
-      { keys: ['W'], touch: 'TUCK', label: 'Tuck for speed — and to burn boost, once you have some' },
-      { keys: ['S'], touch: 'BRAKE', label: 'Brake and slide' },
+      { keys: ['←', '→'], alt: ['A', 'D'], touch: 'Drag', label: 'Carve onto the heel or toe edge' },
+      { keys: ['↑'], alt: ['W'], touch: 'TUCK', label: 'Tuck for speed — and to burn boost, once you have some' },
+      { keys: ['↓'], alt: ['S'], touch: 'BRAKE', label: 'Brake and slide' },
       { keys: ['Space'], touch: 'OLLIE', label: 'Ollie — hold to load it, release to pop. Time it at the lip' },
       { keys: ['Shift'], touch: 'BUTTER', label: 'Press the board — then steer to spin it on the snow' },
     ],
@@ -23,21 +38,24 @@ export const CONTROL_GROUPS = [
   {
     title: 'In the air',
     rows: [
-      { keys: ['A', 'D'], touch: 'Drag', label: 'Spin the board — on ORIGINAL, let go of the steer once first to arm it' },
-      { keys: ['S'], touch: 'INDY', label: 'Indy — the easy one' },
-      { keys: ['W'], touch: 'NOSE', label: 'Nose grab' },
-      { keys: ['Q'], label: 'Melon' },
-      { keys: ['F'], label: 'Method — worth the most, and the hardest to hold' },
+      { keys: ['←', '→'], alt: ['A', 'D'], touch: 'Drag', label: 'Spin the board — on ORIGINAL, let go of the steer once first to arm it' },
+      { keys: ['↓'], alt: ['S'], touch: 'INDY', label: 'Indy — the easy one' },
+      { keys: ['↑'], alt: ['W'], touch: 'NOSE', label: 'Nose grab' },
+      // The two that used to be marooned on Q and F. Shift is the modifier and
+      // it is the same key as BUTTER, which is the point: one extra key, and
+      // the grabs you already know how to reach become two more.
+      { keys: ['Shift', '↓'], alt: ['Q'], touch: 'BUTTER + BRAKE', label: 'Melon' },
+      { keys: ['Shift', '↑'], alt: ['F'], touch: 'BUTTER + TUCK', label: 'Method — worth the most, and the hardest to hold' },
     ],
   },
   {
     title: 'When it goes wrong',
     rows: [
-      { keys: ['E'], touch: 'Prompt', label: 'Drop back onto the piste, once you are bogged down' },
+      { keys: ['Backspace'], alt: ['E'], touch: 'Prompt', label: 'Drop back onto the piste, once you are bogged down' },
       // No `keys`: a note rather than a binding. The panel renders these
       // without a key cap — see `_buildHelp`.
       { touch: '—', label: 'Three wipeouts a run — go down a fourth time and it is over' },
-      { keys: ['R'], touch: 'Prompt', label: 'Restart the run, at any time' },
+      { keys: ['Enter'], alt: ['R'], touch: 'Prompt', label: 'Restart the run, at any time' },
       { keys: ['Esc'], touch: '?', label: 'Pause, and bring this list back up' },
     ],
   },

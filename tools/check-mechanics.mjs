@@ -1869,6 +1869,95 @@ results.fun = await page.evaluate(async () => {
  *      that table honest.
  * ================================================================ */
 /* ==================================================================
+ * THE KEYBOARD.
+ *
+ * One promise, and it is the kind that decays without anyone noticing: the
+ * whole game is reachable from the arrow cluster. Five keys — the four arrows,
+ * Space and Shift — cover carving, speed, braking, the ollie, the press and all
+ * four grabs, so a player with one hand on the arrows never has to find a
+ * letter key on the far side of the keyboard.
+ *
+ * It decays the way this sort of thing always does: a trick gets added, the
+ * nearest free letter gets used, and nobody notices that the arrow scheme is
+ * now missing one. That is exactly what had happened — melon and method were on
+ * Q and F, which is not merely far from a hand on the arrows, it is the other
+ * side of the board, and in practice meant those two grabs did not exist for
+ * anyone playing that way.
+ *
+ * So this drives the real `Input` class with real `KeyboardEvent`s and asks
+ * what the rider would have been told.
+ * ================================================================ */
+results.keyboard = await page.evaluate(async () => {
+  const { Input } = await import('/src/core/Input.js');
+
+  // A private target, so this cannot be disturbed by — or disturb — the
+  // listeners the running game has on `window`.
+  const target = new EventTarget();
+  const input = new Input(target);
+  const send = (type, code) => target.dispatchEvent(
+    new KeyboardEvent(type, { code, bubbles: false, cancelable: true }));
+  const hold = (...codes) => {
+    input.clear();
+    for (const c of codes) send('keydown', c);
+    return { steer: input.steer, tuck: input.tuck, brake: input.brake, press: input.press, grab: input.grabType };
+  };
+
+  // Which grabs the arrow cluster alone can reach, and which need a letter.
+  const arrowGrabs = new Set([
+    hold('ArrowUp').grab,
+    hold('ArrowDown').grab,
+    hold('ShiftRight', 'ArrowUp').grab,
+    hold('ShiftRight', 'ArrowDown').grab,
+  ].filter(Boolean));
+  const letterGrabs = new Set([hold('KeyQ').grab, hold('KeyF').grab].filter(Boolean));
+
+  // Arrows and letters have to be the same control, not merely both present.
+  const pairs = [['ArrowLeft', 'KeyA'], ['ArrowRight', 'KeyD'], ['ArrowUp', 'KeyW'], ['ArrowDown', 'KeyS']];
+  const samePairs = pairs.every(([arrow, letter]) => {
+    const a = hold(arrow);
+    const l = hold(letter);
+    return a.steer === l.steer && a.tuck === l.tuck && a.brake === l.brake && a.grab === l.grab;
+  });
+
+  // Edge-triggered flags, which the held-key probe above cannot see.
+  input.clear();
+  send('keydown', 'Enter');
+  const enterRestarts = input.restartPressed;
+  input.clear();
+  send('keydown', 'Backspace');
+  const backspaceRescues = input.rescuePressed;
+  input.clear();
+  send('keydown', 'KeyR');
+  const rRestarts = input.restartPressed;
+  input.clear();
+  send('keydown', 'KeyE');
+  const eRescues = input.rescuePressed;
+
+  // The press modifier must not eat the ground controls: Shift + Up on the
+  // snow is still a tuck, and Shift is still a press. Only `grabType` changes,
+  // and `grabType` is only ever read airborne.
+  const shiftUp = hold('ShiftRight', 'ArrowUp');
+  const shiftDown = hold('ShiftRight', 'ArrowDown');
+
+  // Every probe first, and only then the teardown. `dispose` unhooks the
+  // listeners, so a `hold` after it reads a keyboard nothing is listening to
+  // and reports a stone-dead zero — which is what the last two lines of this
+  // object did on the first run, and which looks exactly like a real failure.
+  const out = {
+    arrowGrabs: [...arrowGrabs].sort(),
+    letterGrabs: [...letterGrabs].sort(),
+    samePairs,
+    enterRestarts, backspaceRescues, rRestarts, eRescues,
+    modifierKeepsTuck: shiftUp.tuck === true && shiftUp.press === true,
+    modifierKeepsBrake: shiftDown.brake === true && shiftDown.press === true,
+    leftSteer: hold('ArrowLeft').steer,
+    rightSteer: hold('ArrowRight').steer,
+  };
+  input.dispose();
+  return out;
+});
+
+/* ==================================================================
  * THE BACKDROP.
  *
  * The panorama is four nested ranges wrapped round the horizon, and what makes
@@ -3491,6 +3580,28 @@ const checks = [
   /* ==================================================================
    * CHARACTERS. See the measurement block for why each of these is here.
    * ================================================================ */
+  /* ================= keyboard ====================================== */
+  ['every grab is reachable without leaving the arrow keys',
+    results.keyboard.arrowGrabs.join(',') === 'indy,melon,method,nose',
+    `arrows and Shift reach ${results.keyboard.arrowGrabs.join(', ')}; ` +
+    `the letter keys still reach ${results.keyboard.letterGrabs.join(', ')}`],
+
+  ['arrows and letters are the same control, not two schemes',
+    results.keyboard.samePairs &&
+    results.keyboard.leftSteer === -1 && results.keyboard.rightSteer === 1,
+    'left/right/up/down match A/D/W/S on steer, tuck, brake and grab'],
+
+  // The modifier is only allowed to change what happens in the air. If it ate
+  // the tuck, holding Shift down a straight would silently cost you speed.
+  ['the grab modifier leaves the ground controls alone',
+    results.keyboard.modifierKeepsTuck && results.keyboard.modifierKeepsBrake,
+    'Shift+Up is still a tuck and a press; Shift+Down is still a brake and a press'],
+
+  ['restart and rescue are both reachable from either hand',
+    results.keyboard.enterRestarts && results.keyboard.rRestarts &&
+    results.keyboard.backspaceRescues && results.keyboard.eRescues,
+    'restart on Enter and R, rescue on Backspace and E'],
+
   /* ================= backdrop ====================================== */
   ['the further a peak is, the more air is in front of it',
     (() => {

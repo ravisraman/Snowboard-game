@@ -824,11 +824,10 @@ body.is-touch .controls.touch-only { display: grid; }
   text-transform: uppercase;
 }
 
-/* `.ctrl span` is (0,1,1) and would otherwise win over a bare `.tkey` (0,1,0)
-   and drop the pill into the description column, stacking the two on top of
-   each other. Two classes settles it. */
+/* The phone's pill sits in the same first column the key caps use, so the two
+   lists line up with each other even though only one of them is ever shown. */
 .ctrl .tkey {
-  grid-column: 1 / span 2;
+  grid-column: 1;
   justify-self: start;
 }
 
@@ -1038,9 +1037,23 @@ body.is-touch .touch { display: block; }
   margin-bottom: 20px;
 }
 
+/* Three columns: the keys, what they do, and the letter equivalent.
+
+   The keys used to be two fixed 2.6em cells with a `:has(kbd:only-of-type)`
+   rule widening the single-key case. That held exactly as long as every
+   binding was one character: `Backspace` and `Shift` + an arrow both overflow
+   a cell sized for `W`. Putting the caps in their own flex box and giving that
+   box one column of the grid keeps the labels aligned down the panel — which
+   is the only thing the fixed columns were ever really for — while letting a
+   row carry a key with a name on it. */
 .ctrl {
   display: grid;
-  grid-template-columns: repeat(2, 2.6em) 1fr;
+  /* `minmax(0, 1fr)` and not `1fr`: a grid track's default minimum is
+     min-content, so the longest unbreakable run in a label sets a floor the
+     column will not go below, and the row overflows to the right instead of
+     wrapping. That pushed the letter column clean off the edge of the panel. */
+  grid-template-columns: 8.4em minmax(0, 1fr) 2.4em;
+  padding-right: 6px;
   align-items: center;
   gap: 8px;
   text-align: left;
@@ -1048,9 +1061,20 @@ body.is-touch .touch { display: block; }
   opacity: 0.9;
 }
 
-.ctrl span { grid-column: 3; opacity: 0.8; }
-.ctrl kbd:only-of-type { grid-column: 1 / span 2; min-width: 0; }
-.ctrl:has(kbd:only-of-type) kbd { justify-self: start; padding-inline: 1em; }
+.ctrl-keys { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.ctrl-label { opacity: 0.8; }
+
+/* The letters, for a hand that already knows them. Quiet, and last: the panel
+   teaches one scheme, and a second column of equally loud keys would make it
+   look like a choice you have to make before you can start. */
+.ctrl-alt {
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  opacity: 0.34;
+  white-space: nowrap;
+  text-align: right;
+}
 
 /* ======================== Course picker ====================== */
 

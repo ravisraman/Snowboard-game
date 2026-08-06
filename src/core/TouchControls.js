@@ -45,8 +45,13 @@ export class TouchControls {
   /**
    * Neither brake nor tuck has anything to do in the air, so both become grabs
    * up there — the buttons relabel themselves rather than a phone screen
-   * growing two more controls. Butter is the reverse: meaningless airborne, so
-   * it dims out.
+   * growing two more controls.
+   *
+   * Butter used to dim out airborne, because it genuinely did nothing there.
+   * It is the grab modifier now: held together with TUCK or BRAKE it gives the
+   * method and the melon, which a phone previously had no way to reach at all.
+   * So it lights up as HOLD+ instead of greying out — the label is doing the
+   * teaching, since there is nowhere on a phone to put a key chart.
    */
   setAirborne(airborne) {
     if (airborne === this._airborne) return;
@@ -59,7 +64,11 @@ export class TouchControls {
       this.tuckBtn.textContent = airborne ? 'NOSE' : 'TUCK';
       this.tuckBtn.classList.toggle('is-grab', airborne);
     }
-    this.pressBtn?.classList.toggle('is-idle', airborne);
+    if (this.pressBtn) {
+      this.pressBtn.textContent = airborne ? 'HOLD+' : 'BUTTER';
+      this.pressBtn.classList.toggle('is-grab', airborne);
+      this.pressBtn.classList.remove('is-idle');
+    }
   }
 
   /** Momentary: fires once on press. */

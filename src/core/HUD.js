@@ -257,16 +257,23 @@ export class HUD {
       // "three wipeouts a run" belongs in this list and is not something you
       // press. Assuming it was always there cost a boot: `r.keys.map` on a
       // note row throws before the first frame, and the whole game with it.
+      // `alt` is the same binding for a hand on the letters. It renders quieter
+      // than the arrows and after the label, because the panel's job is to
+      // teach one scheme rather than to offer a choice — the letters are there
+      // for the person who already knows them, not for the person learning.
       const keyRows = group.rows
         .map((r) => `<div class="ctrl${r.keys ? '' : ' ctrl-note'}">` +
-          `${(r.keys ?? []).map((k) => `<kbd>${esc(k)}</kbd>`).join('')}` +
-          `<span>${esc(r.label)}</span></div>`)
+          `<span class="ctrl-keys">${(r.keys ?? []).map((k) => `<kbd>${esc(k)}</kbd>`).join('')}</span>` +
+          `<span class="ctrl-label">${esc(r.label)}</span>` +
+          `${r.alt ? `<em class="ctrl-alt">${r.alt.map((k) => esc(k)).join(' ')}</em>` : ''}` +
+          '</div>')
         .join('');
       html.push(`<div class="controls keys-only">${keyRows}</div>`);
 
       const touchRows = group.rows
         .filter((r) => r.touch)
-        .map((r) => `<div class="ctrl"><span class="tkey">${esc(r.touch)}</span><span>${esc(r.label)}</span></div>`)
+        .map((r) => `<div class="ctrl"><span class="tkey">${esc(r.touch)}</span>` +
+          `<span class="ctrl-label">${esc(r.label)}</span></div>`)
         .join('');
       html.push(`<div class="controls touch-only">${touchRows}</div>`);
     }

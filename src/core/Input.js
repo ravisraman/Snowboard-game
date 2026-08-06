@@ -1,6 +1,31 @@
 /**
- * Keyboard input. WASD (or the arrow keys) to ride, Space to ollie, R to restart.
+ * Keyboard input.
  *
+ * ---------------------------------------------------------------------------
+ * The whole game is on the arrow keys, Space and Shift
+ * ---------------------------------------------------------------------------
+ * That is a constraint, not a summary, and it is worth writing down because it
+ * is the thing most likely to be broken by adding one more trick later.
+ *
+ *   ← →     carve, and spin the board once you are off the snow
+ *   ↑       tuck for speed  ·  in the air, a nose grab
+ *   ↓       brake           ·  in the air, an indy
+ *   Space   ollie — hold to load it
+ *   Shift   press the board  ·  in the air, it is the *modifier*:
+ *             Shift + ↑ = method     Shift + ↓ = melon
+ *
+ * Right Shift sits immediately beside the arrow cluster on essentially every
+ * keyboard, so one hand on the arrows can reach all five without moving. That
+ * matters more than it sounds: the two grabs behind the modifier used to live
+ * on Q and F, which are not merely far away from a hand on the arrows — they
+ * are on the *other side of the keyboard*, which in practice meant nobody
+ * playing on the arrows ever did a method or a melon at all.
+ *
+ * WASD still works, every letter binding still works, and two people can share
+ * a keyboard with one on each. Nothing below was removed; the arrow scheme was
+ * made complete.
+ *
+ * ---------------------------------------------------------------------------
  * `steer` is raw -1/0/1 on purpose: all of the smoothing lives in the rider's
  * edge-angle spring, so the weight of a turn is a property of the board rather
  * than of the input layer.
@@ -16,8 +41,17 @@ const KEYMAP = {
   KeyW: 'tuck', ArrowUp: 'tuck',
   KeyS: 'brake', ArrowDown: 'brake',
   Space: 'jump',
-  KeyR: 'restart',
-  KeyE: 'rescue',
+  // Restart is also on Enter, which is on the same side of the keyboard as the
+  // arrows. R stays for the hand that grew up on it.
+  KeyR: 'restart', Enter: 'restart', NumpadEnter: 'restart',
+  // Rescue is the one action with no natural home near the arrows. Backspace
+  // is not evocative, but it is on the right-hand side of every keyboard ever
+  // made, which E is not — and the stuck panel puts a clickable button on
+  // screen anyway, so this is the third way out rather than the only one.
+  KeyE: 'rescue', Backspace: 'rescue',
+  // The named grabs. Redundant now that Shift plus an arrow reaches both, and
+  // kept because taking a binding away from someone who uses it is a cost with
+  // no matching benefit.
   KeyQ: 'melon',
   KeyF: 'method',
   ShiftLeft: 'press', ShiftRight: 'press',
@@ -95,14 +129,30 @@ export class Input {
   get press() { return this.down.has('press') || this.touch.press; }
 
   /**
-   * Which grab is being asked for, or null. Tuck and brake double up here —
-   * neither does anything airborne, so the two keys a rider already has under
-   * their fingers become two of the four grabs, and the phone gets both without
-   * growing a single new button.
+   * Which grab is being asked for, or null.
+   *
+   * Tuck and brake double up here — neither does anything airborne, so the two
+   * keys a rider already has under their fingers become two of the four grabs,
+   * and the phone gets them without growing a single new button.
+   *
+   * Press is the third thing that does nothing airborne (`Rider._update` only
+   * reads it on the grounded branch), which is what makes it free to use as a
+   * modifier. Holding it turns the same two arrows into the other two grabs, so
+   * the full vocabulary is four combinations of three keys rather than four
+   * separate keys scattered across the board — and the phone, which has a
+   * BUTTER button already, gets the two it could never reach before.
+   *
+   * The order matters: the explicit letter keys win, then the modified arrows,
+   * then the bare ones. Otherwise holding Shift and ↑ would resolve as a nose.
    */
   get grabType() {
     if (this.down.has('method')) return 'method';
     if (this.down.has('melon')) return 'melon';
+    if (this.press) {
+      if (this.tuck) return 'method';
+      if (this.brake) return 'melon';
+      return null;
+    }
     if (this.tuck) return 'nose';
     if (this.brake) return 'indy';
     return null;
