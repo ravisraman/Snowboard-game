@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { makeRng, clamp, smoothstep, valueNoise2 } from '../core/mathx.js';
+import { makeRng, clamp } from '../core/mathx.js';
 
 /**
  * Sky, sun and the mountain panorama.
@@ -12,15 +12,6 @@ import { makeRng, clamp, smoothstep, valueNoise2 } from '../core/mathx.js';
 
 export const SUN_DIRECTION = new THREE.Vector3(-0.66, 0.72, 0.28).normalize();
 export const HORIZON_COLOR = new THREE.Color('#c3d9ec');
-
-/** The conifer band that wraps the lower slopes of every range. */
-const FOREST_COLOR = new THREE.Color('#3d5a66');
-
-/** Snow out of the sun goes blue, not grey — it is lit by sky alone. */
-const SNOW_SHADOW = new THREE.Color('#7ba3cd');
-
-/** The warm rim a face picks up when it is turned toward a low winter sun. */
-const SUN_WARM = new THREE.Color('#ffeacb');
 
 /**
  * Aerial perspective.
@@ -51,9 +42,9 @@ const SUN_WARM = new THREE.Color('#ffeacb');
  * thins going up, and it is also, incidentally, the thing that makes a range
  * look like it is standing in air rather than cut out of it.
  */
-const EXTINCTION_M = 12000;
-const VALLEY_MURK = 0.76;
-const SCALE_HEIGHT_M = 300;
+const EXTINCTION_M = 13000;
+const VALLEY_MURK = 0.96;
+const SCALE_HEIGHT_M = 95;
 
 /**
  * What the haze is *made of*, which is not one colour.
@@ -64,8 +55,8 @@ const SCALE_HEIGHT_M = 300;
  * that sits in weather and one that has been faded toward grey, and it costs a
  * dot product.
  */
-const HAZE_AWAY = new THREE.Color('#a2c1e0');
-const HAZE_TOWARD = new THREE.Color('#d2dde8');
+const HAZE_AWAY = new THREE.Color('#8fb6e4');
+const HAZE_TOWARD = new THREE.Color('#cfdcec');
 
 const SKY_VERT = /* glsl */ `
   varying vec3 vDir;
@@ -249,270 +240,446 @@ export function buildSkyProbe(renderer) {
  * ---------------------------------------------------------------- */
 
 /**
- * Ridged fractal noise — the standard trick for mountains, and the reason these
+ * Gradient noise, -1..1. Value noise is fine for lumps in a snowfield and wrong
+ * for a mountain range: its features line up with its lattice, and folding it
+ * into ridges turns that into crestlines that all run north-south or east-west.
+ */
+function gradNoise(x, y, seed) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10);
+  const v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
+  const g = (ix, iy, dx, dy) => {
+    let h = Math.imul(ix, 0x1f1f1f1f) ^ Math.imul(iy, 0x2545f491) ^ Math.imul(seed, 0x9e3779b1);
+    h ^= h >>> 13;
+    h = Math.imul(h, 0xc2b2ae35);
+    h ^= h >>> 16;
+    const a = ((h >>> 0) / 4294967296) * Math.PI * 2;
+    return Math.cos(a) * dx + Math.sin(a) * dy;
+  };
+  const a = g(xi, yi, xf, yf);
+  const b = g(xi + 1, yi, xf - 1, yf);
+  const c = g(xi, yi + 1, xf, yf - 1);
+  const d = g(xi + 1, yi + 1, xf - 1, yf - 1);
+  return (a + (b - a) * u + (c + (d - c) * u - (a + (b - a) * u)) * v) * 1.41;
+}
+
+/**
+ * Ridged multifractal — the standard trick for mountains, and the reason these
  * ranges have crests rather than lumps.
  *
- * Ordinary fractal noise gives you rolling hills: its extremes are smooth
- * maxima, so every summit is a dome. Folding the noise about its midpoint
- * (`1 - |2n - 1|`) turns those smooth crossings into creases, and stacking
- * octaves of *that* gives sharp ridgelines with spurs and gullies hanging off
- * them, which is what an alpine range actually is.
+ * Ordinary fractal noise gives rolling hills: its extremes are smooth maxima,
+ * so every summit is a dome. Folding the noise about zero (`1 - |n|`) turns
+ * those crossings into creases. The *multi* part is that each octave is
+ * weighted by the one before it, so detail piles up along the crests and the
+ * valley floors between them stay smooth — which is what erosion does, and what
+ * a plain sum of ridged octaves, equally rough everywhere, does not.
  */
-function ridged(x, y, seed, octaves = 5, lacunarity = 2.07, gain = 0.5) {
+function ridged(x, y, seed, octaves = 6) {
   let sum = 0;
   let amp = 1;
   let norm = 0;
-  let fx = x;
-  let fy = y;
+  let freq = 1;
+  let prev = 1;
   for (let o = 0; o < octaves; o++) {
-    const n = valueNoise2(fx, fy, seed + o * 131);
-    const r = 1 - Math.abs(n * 2 - 1);
-    // Squaring sharpens the crest and deepens the valleys between them.
-    sum += amp * r * r;
+    let r = 1 - Math.abs(gradNoise(x * freq, y * freq, seed + o * 131));
+    r *= r;
+    sum += amp * r * (o === 0 ? 1 : clamp(prev * 1.7, 0, 1));
     norm += amp;
-    amp *= gain;
-    fx *= lacunarity;
-    fy *= lacunarity;
+    prev = r;
+    amp *= 0.46;
+    freq *= 2.13;
   }
   return sum / norm;
 }
 
 /**
  * One range: a band of mountains wrapped all the way round the horizon, built
- * as a height field over an annulus rather than as a row of separate peaks.
+ * as a height field over an annulus rather than as a row of separate peaks. A
+ * real range is *continuous* — a crestline that rises into summits and drops
+ * into cols, with spurs running down toward you — and you cannot get cols and
+ * spurs out of objects that do not touch.
  *
- * That is the whole change in approach. Isolated cones read as cones however
- * carefully they are shaded — a real range is *continuous*, a crestline that
- * rises into summits and drops into cols with spurs running down toward you,
- * and you cannot get cols and spurs out of objects that do not touch. A polar
- * height field gets all of it for a few thousand triangles.
+ * The mesh is dense and smooth-shaded, and that is the point of this version.
+ * It used to be a few thousand flat-shaded facets, ten rows from foot to
+ * summit, and what that draws is not a mountain but a sheet of crumpled paper
+ * with long vertical slivers hanging off the skyline. Everything that reads as
+ * rock, snow or forest is now decided per pixel in the shader; the geometry's
+ * only job is to be the right *shape*, which takes a lot more of it.
  */
 function buildRange(rng, ring) {
-  const positions = [];
-  const colors = [];
-
   const seed = rng.int(0, 100000);
-  const thetaSteps = ring.thetaSteps;
-  const rSteps = ring.rSteps;
+  const { thetaSteps, rSteps } = ring;
   const depth = ring.outer - ring.inner;
+  const f = 1 / ring.featureSize;
 
-  const rockCol = new THREE.Color(ring.rock);
-  const snowCol = new THREE.Color(ring.snow);
-
-  /** Height of the range at a point on the annulus. */
-  const heightAt = (theta, t) => {
-    // Arc length, so noise features are a consistent size in metres however far
-    // out the range sits — otherwise the distant ranges come out visibly
-    // stretched sideways.
-    const mid = ring.inner + depth * 0.5;
-    const s = theta * mid;
-    const r = ring.inner + t * depth;
-
-    // The crest. Low frequency along the arc so summits are hundreds of metres
-    // apart, and much slower still across the range so ridges run toward the
-    // viewer rather than parallel to the horizon.
-    const crest = ridged(s / ring.featureSize, r / (ring.featureSize * 2.6), seed);
+  const heightAt = (x, z, t) => {
+    // Bend the lattice first, so ridges wander instead of running straight.
+    const wx = gradNoise(x * f * 0.45, z * f * 0.45, seed + 11) * 0.5;
+    const wz = gradNoise(x * f * 0.45 + 7.3, z * f * 0.45 - 2.1, seed + 23) * 0.5;
+    const crest = ridged(x * f + wx, z * f + wz, seed);
 
     // Massifs: a slow envelope that lifts whole sections of the range and drops
     // others into passes, so the skyline has a rhythm instead of a uniform saw.
-    const massif = 0.55 + 0.72 * valueNoise2(s / (ring.featureSize * 5.5), 0.5, seed + 7717);
+    const massif = clamp(
+      0.42 + 0.5 * (gradNoise(x * f * 0.21, z * f * 0.21, seed + 7717) * 0.5 + 0.5)
+        + 0.3 * Math.max(0, gradNoise(x * f * 0.5, z * f * 0.5, seed + 991)),
+      0, 1);
 
     // Front-to-back envelope: the range rises out of the valley floor, tops out
-    // a little past its middle, and falls away behind.
-    const band = Math.sin(Math.PI * Math.pow(t, 0.78));
+    // a little before its middle, and falls away behind.
+    const band = Math.sin(Math.PI * Math.pow(t, 0.8));
 
-    return ring.height * Math.pow(crest, 1.15) * massif * band;
+    // A broad base carrying a crest. The base is what gives a mountain its
+    // bulk — with the ridges alone a range comes out as a row of needles.
+    return ring.height * band * massif * (0.3 + 0.7 * Math.pow(crest, 1.25));
   };
 
-  const P = (theta, t) => {
+  const cols = thetaSteps;           // wraps
+  const rows = rSteps + 1;
+  const count = cols * rows;
+  const positions = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3);
+  const info = new Float32Array(count * 4);
+  const occ = new Float32Array(count);
+  const heights = new Float32Array(count);
+
+  for (let j = 0; j < rows; j++) {
+    // Rows packed toward the viewer's side of the range, where the faces that
+    // are actually seen are; the back of a mountain needs very little.
+    const t = Math.pow(j / rSteps, 1.25);
     const r = ring.inner + t * depth;
-    return new THREE.Vector3(Math.sin(theta) * r, heightAt(theta, t), Math.cos(theta) * r);
-  };
-
-  const col = new THREE.Color();
-  const hazeCol = new THREE.Color();
-  const ab = new THREE.Vector3();
-  const ac = new THREE.Vector3();
-  const nrm = new THREE.Vector3();
-
-  /**
-   * Shades one facet and writes it out.
-   *
-   * Snow lies where the ground is flat enough to hold it. That single rule is
-   * what turns a white pyramid into a mountain: the steep faces come out as
-   * bare rock, the shoulders and the summit fields stay white, and the snowline
-   * ends up ragged for free because the surface is ragged. Painting a snowline
-   * at a fixed altitude instead gives you a wedding cake.
-   */
-  const face = (p, q, r) => {
-    ab.subVectors(q, p);
-    ac.subVectors(r, p);
-    nrm.crossVectors(ab, ac).normalize();
-    if (nrm.y < 0) nrm.negate();
-
-    const sun = Math.max(0, nrm.dot(SUN_DIRECTION));
-    const midY = (p.y + q.y + r.y) / 3;
-    const altitude = clamp(midY / ring.height, 0, 1);
-
-    // Flat enough, and high enough. Altitude gates it — nothing below the
-    // snowline holds snow whatever its angle — and the slope then decides how
-    // much: a plastered face up high keeps a quarter of it, a shoulder keeps
-    // all of it, and the sheer walls stay bare rock, which is where all the
-    // contrast in a real range comes from. The altitude term is jittered by the
-    // facet's own position so the line never reads as a contour.
-    const flat = smoothstep(0.5, 0.86, nrm.y);
-    const jitter = valueNoise2(p.x * 0.004, p.z * 0.004, seed + 313) * 0.18;
-    const high = smoothstep(ring.snowline - 0.08, ring.snowline + 0.26, altitude + jitter);
-    const snowAmount = clamp(high * (0.12 + 0.9 * flat), 0, 1);
-
-    col.copy(rockCol).lerp(snowCol, snowAmount);
-
-    // Sunlit and shaded faces on a snow peak differ in hue more than in value —
-    // one is warm white, the other is lit by blue sky alone. Darkening without
-    // the hue shift is exactly what makes CG mountains look like grey card.
-    col.lerp(SNOW_SHADOW, (1 - sun) * (0.34 + 0.34 * snowAmount));
-    col.multiplyScalar(0.44 + 0.72 * sun);
-
-    // Forward scatter: faces turned toward the sun pick up a warm rim. It is a
-    // small effect and it does more for the sense of distance than the haze.
-    col.lerp(SUN_WARM, Math.pow(sun, 3.5) * 0.3);
-
-    // A conifer band around the feet of the nearer ranges.
-    if (ring.forest > 0) {
-      const band = smoothstep(0.015, 0.06, altitude) * (1 - smoothstep(0.1, 0.28, altitude));
-      col.lerp(FOREST_COLOR, band * ring.forest * (1 - snowAmount * 0.55));
+    for (let i = 0; i < cols; i++) {
+      const theta = (i / cols) * Math.PI * 2;
+      const x = Math.sin(theta) * r;
+      const z = Math.cos(theta) * r;
+      const k = j * cols + i;
+      const y = heightAt(x, z, t);
+      heights[k] = y;
+      positions[k * 3] = x;
+      positions[k * 3 + 1] = y;
+      positions[k * 3 + 2] = z;
+      info[k * 4] = ring.height;
+      info[k * 4 + 1] = ring.treeline;
+      info[k * 4 + 2] = ring.detailScale;
+      info[k * 4 + 3] = ring.snowline;
     }
+  }
 
-    /*
-     * Aerial perspective. See the constants at the top of the file for why this
-     * is shaped the way it is; what happens here is only the arithmetic.
-     *
-     * The viewer is at the origin — the whole backdrop rides with the camera —
-     * so the distance is just the facet's own radius, and the ray runs from
-     * roughly valley height up to the facet. Averaging the density at the two
-     * ends is a crude integral and an entirely sufficient one over three
-     * kilometres of height: what it has to get right is the *ordering*, and it
-     * does.
-     */
-    const midX = (p.x + q.x + r.x) / 3;
-    const midZ = (p.z + q.z + r.z) / 3;
-    const dist = Math.hypot(midX, midZ);
+  const at = (i, j) => ((j < 0 ? 0 : j >= rows ? rows - 1 : j) * cols + ((i % cols) + cols) % cols);
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const k = j * cols + i;
+      const a = at(i - 1, j) * 3;
+      const b = at(i + 1, j) * 3;
+      const c = at(i, j - 1) * 3;
+      const d = at(i, j + 1) * 3;
+      e1.set(positions[b] - positions[a], positions[b + 1] - positions[a + 1], positions[b + 2] - positions[a + 2]);
+      e2.set(positions[d] - positions[c], positions[d + 1] - positions[c + 1], positions[d + 2] - positions[c + 2]);
+      n.crossVectors(e1, e2).normalize();
+      if (n.y < 0) n.negate();
+      normals[k * 3] = n.x;
+      normals[k * 3 + 1] = n.y;
+      normals[k * 3 + 2] = n.z;
 
-    // How far away it is.
-    const byDistance = 1 - Math.exp(-(dist / EXTINCTION_M) * ring.hazeScale);
-    // And how deep in the valley air it is, which is what dissolves the feet.
-    const murk = Math.exp(-Math.max(midY, 0) / SCALE_HEIGHT_M);
-    const haze = byDistance + (1 - byDistance) * murk * VALLEY_MURK;
-
-    // The colour of that air, warm looking into the sun and blue looking away.
-    const inv = 1 / Math.max(dist, 1e-3);
-    const toward = (midX * inv) * SUN_DIRECTION.x + (midZ * inv) * SUN_DIRECTION.z;
-    hazeCol.copy(HAZE_AWAY).lerp(HAZE_TOWARD, smoothstep(-0.35, 0.95, toward));
-
-    col.lerp(hazeCol, clamp(haze, 0, 1));
-
-    for (const v of [p, q, r]) {
-      positions.push(v.x, v.y, v.z);
-      colors.push(col.r, col.g, col.b);
+      /*
+       * Baked occlusion: how far this point sits below its neighbourhood. A
+       * gully is darker than the spur beside it for reasons that have nothing
+       * to do with which way either faces — it sees less sky — and without
+       * that a ridged height field shades like a relief map lit by a torch.
+       */
+      let sum = 0;
+      let m = 0;
+      for (let dj = -4; dj <= 4; dj += 2) {
+        for (let di = -4; di <= 4; di += 2) {
+          sum += heights[at(i + di, j + dj)];
+          m++;
+        }
+      }
+      occ[k] = clamp(0.62 + (heights[k] - sum / m) / (ring.height * 0.085), 0, 1);
     }
-  };
+  }
 
-  for (let i = 0; i < thetaSteps; i++) {
-    const t0 = (i / thetaSteps) * Math.PI * 2;
-    const t1 = ((i + 1) / thetaSteps) * Math.PI * 2;
-    for (let j = 0; j < rSteps; j++) {
-      const a = j / rSteps;
-      const b = (j + 1) / rSteps;
-      const p00 = P(t0, a);
-      const p10 = P(t1, a);
-      const p01 = P(t0, b);
-      const p11 = P(t1, b);
-      face(p00, p01, p11);
-      face(p00, p11, p10);
+  const index = [];
+  for (let j = 0; j < rows - 1; j++) {
+    for (let i = 0; i < cols; i++) {
+      const a = j * cols + i;
+      const b = j * cols + ((i + 1) % cols);
+      const c = a + cols;
+      const d = b + cols;
+      index.push(a, c, d, a, d, b);
     }
   }
 
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geo.setAttribute('aInfo', new THREE.BufferAttribute(info, 4));
+  geo.setAttribute('aOcc', new THREE.BufferAttribute(occ, 1));
+  geo.setIndex(index);
   return geo;
 }
+
+const PANORAMA_VERT = /* glsl */ `
+  attribute vec4 aInfo;
+  attribute float aOcc;
+  varying vec3 vPos;
+  varying vec3 vNrm;
+  varying vec4 vInfo;
+  varying float vOcc;
+  void main() {
+    vPos = position;
+    vNrm = normal;
+    vInfo = aInfo;
+    vOcc = aOcc;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+/**
+ * The mountain, per pixel.
+ *
+ * Three materials and the rules for where each one lives, which are the whole
+ * of what makes a height field read as an alpine range:
+ *
+ * **Snow lies where the ground can hold it.** Steep faces shed it and come out
+ * as bare rock; shoulders, bowls and summit fields stay white. The threshold is
+ * broken up with noise so the boundary is a ragged edge of couloirs and ledges
+ * rather than a contour line.
+ *
+ * **Forest stops at the treeline.** Dark conifer on the lower flanks, thinning
+ * out and breaking into fingers as it climbs. This is the single biggest value
+ * contrast in a winter landscape, and the thing whose absence made the old
+ * panorama a wall of one grey: near-black forest under near-white snow.
+ *
+ * **Air is blue, and thicker low down.** Distance washes everything toward the
+ * sky's own colour — warm on the sun's side, blue away from it — and the feet
+ * of every range stand in valley haze, which is also what lets them dissolve
+ * into the scene's own fog instead of meeting it on a seam.
+ *
+ * It is unlit as far as three.js is concerned: the scene's fill light is tuned
+ * for snow ten metres away and is far too much for a peak at four kilometres,
+ * so the sun and sky terms here are this shader's own.
+ */
+const PANORAMA_FRAG = /* glsl */ `
+  varying vec3 vPos;
+  varying vec3 vNrm;
+  varying vec4 vInfo;
+  varying float vOcc;
+  uniform vec3 uSunDir;
+  uniform vec3 uSunColor;
+  uniform vec3 uSkyLight;
+  uniform vec3 uHazeAway;
+  uniform vec3 uHazeToward;
+  uniform vec3 uHorizon;
+  uniform float uExtinction;
+  uniform float uMurk;
+  uniform float uMurkHeight;
+
+  float hash(vec2 p) {
+    p = fract(p * vec2(233.34, 851.73));
+    p += dot(p, p + 23.45);
+    return fract(p.x * p.y);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    float s = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < DETAIL_OCTAVES; i++) {
+      s += a * vnoise(p);
+      p = p * 2.07 + 13.1;
+      a *= 0.5;
+    }
+    return s;
+  }
+
+  void main() {
+    vec3 Ng = normalize(vNrm);
+    float H = vInfo.x;
+    float treeline = vInfo.y;
+    float s = vInfo.z;               // metres per unit of detail, per range
+    float alt = vPos.y / H;
+
+    // Two scales of breakup: buttress-sized and ledge-sized.
+    float big = fbm(vPos.xz / (150.0 * s));
+    float fine = fbm(vPos.xz / (34.0 * s) + 41.0);
+
+    // Bump the fine relief into the normal, from screen-space derivatives, so
+    // the lighting has rock structure in it that the mesh does not.
+    vec3 N = Ng;
+    {
+      float h = (big * 0.6 + fine * 0.4) * 46.0 * s;
+      vec3 dpx = dFdx(vPos);
+      vec3 dpy = dFdy(vPos);
+      float dhx = dFdx(h);
+      float dhy = dFdy(h);
+      vec3 r1 = cross(dpy, Ng);
+      vec3 r2 = cross(Ng, dpx);
+      float det = dot(dpx, r1);
+      vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+      N = normalize(abs(det) * Ng - grad * 0.85);
+    }
+
+    /* --- what is on the ground here ---------------------------------- */
+
+    // Rock: cold grey-brown, banded along the bedding and stained by the big
+    // noise so a wall is not one flat tone.
+    float strata = sin(vPos.y * 0.055 / s + big * 9.0 + fine * 3.0) * 0.5 + 0.5;
+    vec3 rock = mix(vec3(0.060, 0.062, 0.075), vec3(0.150, 0.138, 0.135), big);
+    rock *= 0.78 + 0.34 * strata;
+
+    // Snow holds on anything gentler than a cliff.
+    float steep = 1.0 - smoothstep(0.50, 0.70, Ng.y + (fine - 0.5) * 0.34 + (big - 0.5) * 0.12);
+    float high = smoothstep(vInfo.w - 0.16, vInfo.w + 0.2, alt + (big - 0.5) * 0.3);
+    // Up high even the walls are plastered; lower down they are swept bare.
+    float snow = clamp(1.0 - steep * mix(1.0, 0.72, high), 0.0, 1.0);
+    snow = max(snow, smoothstep(0.62, 0.9, fine) * 0.5 * high);
+    vec3 albedo = mix(rock, vec3(0.93, 0.95, 0.98), snow);
+
+    // Forest, to the treeline. The mask is three things multiplied: below the
+    // (ragged) line, not on a cliff, and in a stand rather than a clearing.
+    float trees = 0.0;
+    if (treeline > 0.0) {
+      float line = vPos.y + (big - 0.5) * treeline * 1.1 + (fine - 0.5) * treeline * 0.35;
+      trees = 1.0 - smoothstep(treeline * 0.72, treeline * 1.08, line);
+      trees *= smoothstep(0.42, 0.62, Ng.y);
+      trees *= smoothstep(0.26, 0.44, fbm(vPos.xz / (260.0 * s) + 7.0) + trees * 0.2);
+      // Individual crowns are far below a pixel out here; what survives the
+      // distance is the stand's texture, dark trunks and snow-loaded tops.
+      float crowns = vnoise(vPos.xz / (5.5 * s));
+      vec3 forest = mix(vec3(0.016, 0.034, 0.030), vec3(0.060, 0.095, 0.080), crowns);
+      forest = mix(forest, vec3(0.80, 0.86, 0.92), smoothstep(0.55, 0.95, crowns) * 0.42);
+      albedo = mix(albedo, forest, trees);
+    }
+
+    /* --- light -------------------------------------------------------- */
+
+    vec3 L = normalize(uSunDir);
+    float ndl = dot(N, L);
+    // Snow wraps light past the terminator; rock and forest do not.
+    float wrap = mix(0.0, 0.28, snow * (1.0 - trees));
+    float sun = clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0);
+    float sky = 0.55 + 0.45 * N.y;
+    float occ = mix(0.42, 1.0, vOcc);
+    vec3 col = albedo * (uSunColor * sun * mix(0.75, 1.0, vOcc) + uSkyLight * sky * occ);
+
+    /* --- air ---------------------------------------------------------- */
+
+    float dist = length(vPos);
+    float byDistance = 1.0 - exp(-dist / uExtinction);
+    vec2 bearing = normalize(vPos.xz);
+    float toward = dot(bearing, normalize(L.xz));
+    vec3 haze = mix(uHazeAway, uHazeToward, smoothstep(-0.35, 0.95, toward));
+    col = mix(col, haze, byDistance);
+
+    // Valley air: the same colour as the scene's fog, so the two meet unseen.
+    float murk = exp(-max(vPos.y, 0.0) / uMurkHeight) * uMurk;
+    col = mix(col, uHorizon, clamp(murk, 0.0, 1.0));
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
 
 /**
  * Four ranges, nested, each a continuous crestline wrapped round the horizon.
  *
  * Depth comes from three things working together, and all three have to be
  * there or the panorama flattens: each range is *further*, so it is smaller for
- * its height; each is *hazier*, washed further toward the sky colour; and each
- * overlaps the one behind, so the eye gets occlusion to read the order from.
+ * its height; each has more air in front of it; and each overlaps the one
+ * behind, so the eye gets occlusion to read the order from.
  *
- * The nearest is a band of foothills whose only job is to bridge the gap
- * between the fogged edge of the snowfields and the first real range — without
- * it the mountains stand on a visible seam.
+ * The nearest is a band of forested foothills, which bridges the gap between
+ * the far edge of the snowfields and the first real range and gives the white
+ * foreground something dark to sit against.
  *
- * `rock` is really shaded snow: these are snow-plastered alpine faces, so the
- * dark side of a ridge is blue, not brown.
+ * `treeline` is in metres above the valley floor; `detailScale` stretches the
+ * shader's rock and forest texture so a far range is not textured finer than a
+ * pixel, which is what makes distant procedural detail crawl.
  */
+export const PANORAMA_RINGS = [
+  {
+    inner: 760, outer: 2900, height: 330, featureSize: 620,
+    thetaSteps: 420, rSteps: 30,
+    treeline: 300, snowline: 0.9, detailScale: 0.55,
+  },
+  {
+    inner: 2100, outer: 4700, height: 900, featureSize: 1250,
+    thetaSteps: 520, rSteps: 60,
+    treeline: 330, snowline: 0.42, detailScale: 1.0,
+  },
+  {
+    inner: 3800, outer: 6500, height: 1650, featureSize: 1700,
+    thetaSteps: 460, rSteps: 52,
+    treeline: 300, snowline: 0.36, detailScale: 1.7,
+  },
+  {
+    inner: 5600, outer: 7700, height: 2500, featureSize: 2000,
+    thetaSteps: 360, rSteps: 40,
+    treeline: 0, snowline: 0.3, detailScale: 2.4,
+  },
+];
+
+/** How far below the camera the valley floor of the panorama sits, at rest. */
+export const PANORAMA_SINK = 60;
+
 export function buildMountains(seed = 909, quality = {}) {
   const rng = makeRng(seed);
   const group = new THREE.Group();
   group.name = 'panorama';
 
   const detail = quality.panoramaDetail ?? 1;
-  const steps = (n) => Math.max(48, Math.round(n * detail));
-
-  const rings = [
-    {
-      // Foothills. The inner edge reaches back almost to the far lip of the
-      // playable snowfields — its height there is zero, so what it contributes
-      // is a floor, filling the band of empty fog between where the terrain
-      // stops and where the mountains start. Without it the ranges rise out of
-      // a flat grey strip along a visible seam.
-      inner: 820, outer: 2600, height: 300, featureSize: 360,
-      thetaSteps: steps(210), rSteps: Math.max(4, Math.round(7 * detail)),
-      snowline: 0.74, forest: 0.85, hazeScale: 0.9,
-      rock: '#24405c', snow: '#eef5fb',
-    },
-    {
-      inner: 2200, outer: 3900, height: 1250, featureSize: 560,
-      thetaSteps: steps(250), rSteps: Math.max(5, Math.round(10 * detail)),
-      snowline: 0.5, forest: 0.42, hazeScale: 1.0,
-      rock: '#1e3c60', snow: '#f3f8fd',
-    },
-    {
-      inner: 3500, outer: 5600, height: 2100, featureSize: 820,
-      thetaSteps: steps(220), rSteps: Math.max(5, Math.round(10 * detail)),
-      snowline: 0.44, forest: 0.14, hazeScale: 1.12,
-      rock: '#27496c', snow: '#f6fafe',
-    },
-    {
-      inner: 5200, outer: 7400, height: 2950, featureSize: 1100,
-      thetaSteps: steps(190), rSteps: Math.max(4, Math.round(8 * detail)),
-      snowline: 0.4, forest: 0, hazeScale: 1.28,
-      rock: '#355f85', snow: '#f8fbff',
-    },
-  ];
 
   const parts = [];
-  for (const ring of rings) {
-    const geo = buildRange(rng, ring);
-    // Sunk a little, so the valley floor crops the very feet of the ranges and
-    // they rise out of the haze rather than standing on top of it.
-    geo.translate(0, -30, 0);
-    parts.push(geo);
+  for (const ring of PANORAMA_RINGS) {
+    parts.push(buildRange(rng, {
+      ...ring,
+      thetaSteps: Math.max(96, Math.round(ring.thetaSteps * detail)),
+      rSteps: Math.max(12, Math.round(ring.rSteps * detail)),
+    }));
   }
 
-  // Unlit: the sun, the snowline and the atmosphere are all already in the
-  // vertex colours. One mesh, because it is always entirely on screen or
-  // entirely behind you and there is nothing to cull.
-  const mesh = new THREE.Mesh(
-    mergeGeometries(parts, false),
-    new THREE.MeshBasicMaterial({ vertexColors: true, fog: false })
-  );
+  const material = new THREE.ShaderMaterial({
+    defines: { DETAIL_OCTAVES: quality.panoramaOctaves ?? 4 },
+    uniforms: {
+      uSunDir: { value: SUN_DIRECTION.clone() },
+      // Linear and a little over 1 between them: sunlit snow out here should
+      // land where the sunlit piste does, so the tone mapper treats the two as
+      // the same substance.
+      uSunColor: { value: new THREE.Color(1.0, 0.94, 0.84).multiplyScalar(0.86) },
+      uSkyLight: { value: new THREE.Color(0.34, 0.5, 0.82).multiplyScalar(0.36) },
+      uHazeAway: { value: HAZE_AWAY.clone() },
+      uHazeToward: { value: HAZE_TOWARD.clone() },
+      uHorizon: { value: HORIZON_COLOR.clone() },
+      uExtinction: { value: EXTINCTION_M },
+      uMurk: { value: VALLEY_MURK },
+      uMurkHeight: { value: SCALE_HEIGHT_M },
+    },
+    vertexShader: PANORAMA_VERT,
+    fragmentShader: PANORAMA_FRAG,
+    fog: false,
+  });
+
+  // One mesh, because it is always entirely on screen or entirely behind you
+  // and there is nothing to cull.
+  const mesh = new THREE.Mesh(mergeGeometries(parts, false), material);
   mesh.frustumCulled = false;
   mesh.renderOrder = -950;
   group.add(mesh);
 
+  // Sunk a little, so the valley floor crops the very feet of the ranges and
+  // they rise out of the haze rather than standing on top of it.
+  group.position.y = -PANORAMA_SINK;
   return group;
 }
 
